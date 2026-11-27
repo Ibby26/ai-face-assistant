@@ -390,7 +390,8 @@ export class MeshRenderer {
     gl.enable(gl.BLEND);
     gl.blendFuncSeparate(gl.ONE, gl.ONE, gl.ZERO, gl.ONE);
     // where the mesh folds over itself, count each pixel only once per face
-    const multi = layers && layers.length > 1;
+    // (also with one face: a closing eyelid folds over the eye)
+    const multi = true;
     if (multi) {
       gl.enable(gl.STENCIL_TEST);
       gl.stencilFunc(gl.EQUAL, 0, 0xff);

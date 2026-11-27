@@ -94,9 +94,11 @@ Rules:
 - Be fast and spoken: usually 2 to 5 short sentences, unless the user asks for more detail.
 - No markdown, no bullet lists, no URLs, no emojis. Write numbers and dates the way you'd say them.
 - Use web search when the question needs current or specific facts. Don't announce that you are searching.
-- The screen shows pictures about the user's question while you answer. To drive them, the VERY FIRST thing in every reply (before anything else, even before searching) is these two hidden lines:
+- The screen shows pictures about the user's question while you answer. To drive them, the VERY FIRST thing in every reply (before anything else, even before searching) is these three hidden lines:
+[[mood: one word]]
 [[img: search 1 | search 2 | search 3 | search 4 | search 5]]
 [[gen: prompt 1 | prompt 2 | prompt 3]]
+  mood = the facial expression your face should show while answering: happy, excited, sad, surprised, thinking, serious or neutral. Match the subject (sad for tragedies, excited for great news, serious for warnings).
   img = 4 to 6 English searches for real photos on Wikipedia and Wikimedia Commons. Prefer exact English Wikipedia article titles of the specific people, places, objects and events in the answer (they return that article's main photo), plus short, precise Commons searches. Each must be about the user's exact subject. Never generic words, never loosely related topics. Example for "how did World War 2 end": Surrender of Japan | Japanese Instrument of Surrender | USS Missouri (BB-63) | Raising a Flag over the Reichstag | Victory in Europe Day | Atomic bombings of Hiroshima and Nagasaki
   gen = 2 or 3 English prompts for AI-generated pictures that illustrate this specific subject: say exactly what is in the scene (who, what, where, when, era-accurate details) and the mood. Example: "Japanese and Allied officials at the surrender ceremony on the deck of USS Missouri, Tokyo Bay, September 1945, black and white archival photo style"
   If the answer moves on to a clearly different subject, you may add one more [[img: ...]] and [[gen: ...]] line for it. These lines are never read aloud.
@@ -246,7 +248,7 @@ function makeTagParser(onText, onTerms) {
       }
       const inner = buf.slice(2, end);
       buf = buf.slice(end + 2).replace(/^\s*\n?/, '');
-      const m = inner.match(/^\s*(img|gen|facts?|timeline|map)\s*:(.*)$/is);
+      const m = inner.match(/^\s*(mood|img|gen|facts?|timeline|map)\s*:(.*)$/is);
       if (m) {
         const items = m[2].split('|').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean).slice(0, 8);
         if (items.length) onTerms(items, m[1].toLowerCase());
@@ -262,7 +264,10 @@ function sendTag(send, items, kind) {
     const i = s.search(/:\s/) >= 0 ? s.search(/:\s/) : s.indexOf(':');
     return i > 0 ? [s.slice(0, i).trim(), s.slice(i + 1).trim()] : ['', s];
   };
-  if (kind === 'img') send('images', { terms: items.slice(0, 6) });
+  if (kind === 'mood') {
+    const mood = items[0]?.toLowerCase().match(/happy|excited|sad|surprised|thinking|serious|neutral/)?.[0];
+    if (mood) send('mood', { mood });
+  } else if (kind === 'img') send('images', { terms: items.slice(0, 6) });
   else if (kind === 'gen') send('gen', { prompts: items.slice(0, 4) });
   else if (kind === 'fact' || kind === 'facts') {
     send('facts', { items: items.slice(0, 6).map((s) => { const [label, value] = split(s); return { label, value }; }).filter((f) => f.value) });

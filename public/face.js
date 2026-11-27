@@ -5,6 +5,7 @@
 
 import { buildRig, MeshRenderer, landmarksFromMediaPipe, syntheticLandmarks } from './mesh.js';
 import { Morph } from './morph.js';
+import { Expressions, MOODS } from './expressions.js';
 
 const DEFAULT_MARKS = {
   mouth: { x: 0.5, y: 0.715, w: 0.17 },
@@ -55,6 +56,10 @@ export class Face {
     this.found = false; // true when real landmarks were found
     this.morph = null;
     this.morphOn = true; // keep blending in features from other faces
+    this.expr = null; // expressions + eye movement
+    this.mood = 'neutral'; // set from the answer: happy, sad, surprised, ...
+    this.getUser = () => null; // where you are ({x, y} -1..1) when the camera can see you
+    this.gaze = { x: 0, y: 0, tx: 0, ty: 0, next: 0 };
     this._loop = this._loop.bind(this);
   }
 
@@ -71,6 +76,7 @@ export class Face {
     this.canvas.width = W; this.canvas.height = H;
     this.renderer = null;
     this.morph = null;
+    this.expr = null;
     this.found = false;
     const token = (this._token = {});
     // build the rig in the background while the intro plays
@@ -94,6 +100,7 @@ export class Face {
     if (token !== this._token) return;
     const rig = buildRig(W, H, lm);
     this.renderer = new MeshRenderer(W, H, canvas, rig);
+    this.expr = this.found ? new Expressions(rig, lm) : null;
     if (this.found) {
       this.morph = new Morph(rig, lm, canvas, this.renderer);
       this._loadDonors(token);
@@ -292,20 +299,49 @@ export class Face {
 
     if (this.renderer) {
       const m = this.morphOn && this.morph ? this.morph.update(now) : null;
-      ctx.drawImage(this.renderer.render({ open: this.level, width: this.width, teeth: this.teeth, blink, rest: m?.rest, layers: m?.layers }), 0, 0);
+      let rest = m?.rest || null;
+      if (this.expr) {
+        const name = this.mode === 'listening' ? 'listening' : this.mode === 'thinking' ? 'thinking' : this.mood;
+        const target = { ...(MOODS[name] || MOODS.neutral) };
+        // a smile relaxes while the mouth is busy forming words
+        if (target.smile) target.smile *= 1 - Math.min(0.55, this.level * 0.8);
+        rest = this.expr.apply(target, this.gaze, rest);
+      }
+      ctx.drawImage(this.renderer.render({ open: this.level, width: this.width, teeth: this.teeth, blink, rest, layers: m?.layers }), 0, 0);
       if (this.debug) this.renderer.drawDebug(ctx);
     } else {
       ctx.drawImage(this.img, 0, 0);
     }
     if (this.mode === 'thinking') this._drawScan(now);
 
-    // gentle head motion + a little nod while talking
+    this._updateGaze(now);
+    // gentle head motion + a little nod while talking, turned toward you
     const t = now / 1000;
     const tx = Math.sin(t * 0.37) * 4 + Math.sin(t * 1.3) * this.level * 1.5;
     const ty = Math.sin(t * 0.29) * 3 - this.level * 2.5;
     const rot = Math.sin(t * 0.23) * 0.6 + Math.sin(t * 1.7) * this.level * 0.4;
     const sc = 1 + Math.sin(t * 0.9) * 0.004 + (this.mode === 'listening' ? 0.012 : 0);
-    this.canvas.style.transform = `translate(${tx}px, ${ty}px) rotate(${rot}deg) scale(${sc})`;
+    const gx = this.gaze.x, gy = this.gaze.y;
+    this.canvas.style.transform = `perspective(1600px) translate(${tx + gx * 6}px, ${ty + gy * 4}px) rotateY(${gx * 7}deg) rotateX(${-gy * 4}deg) rotate(${rot}deg) scale(${sc})`;
+  }
+
+  // where the eyes look: at you when the camera sees you; otherwise small
+  // natural glances, and up to the side while thinking
+  _updateGaze(now) {
+    const g = this.gaze;
+    const you = this.getUser();
+    if (you) { g.tx = you.x; g.ty = you.y; }
+    else if (this.mode === 'thinking') { g.tx = 0.45; g.ty = -0.55; }
+    else if (now > g.next) {
+      const away = Math.random() < 0.3;
+      g.tx = away ? (Math.random() - 0.5) * 0.7 : (Math.random() - 0.5) * 0.12;
+      g.ty = away ? (Math.random() - 0.5) * 0.4 : (Math.random() - 0.5) * 0.08;
+      g.next = now + (away ? 600 + Math.random() * 700 : 1800 + Math.random() * 2600);
+    }
+    // eyes jump quickly (saccades), like real ones
+    const k = you ? 0.25 : 0.3;
+    g.x += (g.tx - g.x) * k;
+    g.y += (g.ty - g.y) * k;
   }
 
   _blinkAmount(now) {

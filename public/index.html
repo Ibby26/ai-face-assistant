@@ -9,24 +9,29 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="manifest" href="/manifest.json" crossorigin="use-credentials" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <!-- fast-changing pictures behind the face -->
   <div id="bg"><div class="bg-layer"></div><div class="bg-layer"></div></div>
+  <div id="vignette" aria-hidden="true"></div>
   <div id="cards"></div>
 
+  <canvas id="holo" aria-hidden="true"></canvas>
   <main id="stage">
     <canvas id="face" aria-label="AI face"></canvas>
     <div id="halo"></div>
   </main>
 
-  <div id="status" class="pill hidden"></div>
+  <div id="status" class="pill hidden" role="status"></div>
   <div id="sources"></div>
 
   <!-- key facts, timeline and map for the current answer -->
   <aside id="info" class="hidden" aria-live="polite">
-    <button type="button" id="infoClose" class="x" title="Hide">×</button>
+    <button type="button" id="infoClose" class="x" title="Hide" aria-label="Hide panel">×</button>
     <section id="factsBox" hidden><h3>Key facts</h3><dl id="facts"></dl></section>
     <section id="timeBox" hidden><h3>Timeline</h3><ol id="timeline"></ol></section>
     <section id="mapBox" hidden><h3 id="mapName">Map</h3><div class="map"><iframe id="map" title="Map" loading="lazy" referrerpolicy="no-referrer"></iframe></div></section>
@@ -35,56 +40,72 @@
   <div id="subtitle" aria-live="polite"></div>
 
   <form id="bar" autocomplete="off">
-    <button type="button" id="mic" class="round" title="Talk (or hold Space)">
-      <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
+    <button type="button" id="mic" class="round" title="Talk (or hold Space)" aria-label="Talk">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
     </button>
-    <input id="q" type="text" placeholder="Ask me anything…" enterkeyhint="send" />
-    <span id="ear" title="Listening for its name" hidden>👂</span>
-    <button type="submit" id="send" class="round" title="Send">
-      <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M3 20.5V14l9-2-9-2V3.5L22 12 3 20.5Z"/></svg>
+    <input id="q" type="text" placeholder="Ask me anything…" enterkeyhint="send" aria-label="Your question" />
+    <span id="ear" title="Listening for its name" hidden><i></i><span id="earName">Hey Nova</span></span>
+    <button type="submit" id="send" class="round" title="Send" aria-label="Send">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M3 20.5V14l9-2-9-2V3.5L22 12 3 20.5Z"/></svg>
     </button>
-    <button type="button" id="gear" class="round ghost" title="Settings">
-      <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1L11 21h4l.4-2.9c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5L19.4 13ZM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" transform="translate(-1 0)"/></svg>
+    <button type="button" id="gear" class="round ghost" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" width="21" height="21"><path fill="currentColor" d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1L11 21h4l.4-2.9c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5L19.4 13ZM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" transform="translate(-1 0)"/></svg>
     </button>
   </form>
 
-  <aside id="settings" class="hidden">
-    <h2>Settings</h2>
-    <label>Microphone language
-      <select id="micLang"></select>
-    </label>
-    <label class="row"><input type="checkbox" id="wakeOn" checked /> Hands-free: listen for its name</label>
-    <label>Its name <input type="text" id="wakeName" value="Nova" maxlength="20" />
-      <span class="muted" id="wakeHint">Say “Hey Nova, …” any time. Works in Chrome and Edge.</span>
-    </label>
-    <label class="row"><input type="checkbox" id="bargeIn" checked /> Interrupt it by just talking</label>
-    <label class="row"><input type="checkbox" id="showInfo" checked /> Show facts, timeline and map</label>
-    <label class="row"><input type="checkbox" id="showText" checked /> Show subtitles</label>
-    <label class="row"><input type="checkbox" id="aiImgs" checked /> AI-generated images</label>
-    <label class="row"><input type="checkbox" id="morph" checked /> Morph between different people's features</label>
-    <label>Lip-sync timing <span class="muted" id="lipOffsetVal">0 ms</span>
-      <input type="range" id="lipOffset" min="-300" max="300" step="10" value="0" />
-      <span class="muted">Mouth late? Slide right. Mouth early? Slide left. (Bluetooth headphones usually need +150 to +250.)</span>
-    </label>
-    <label class="row"><input type="checkbox" id="showMesh" /> Show face mesh (to check the mouth and eyes were found)</label>
-    <div class="row gap">
-      <button type="button" id="faceBtn">Change face…</button>
-      <button type="button" id="faceReset" class="ghost">Use default face</button>
-      <input type="file" id="faceFile" accept="image/*" hidden />
+  <div id="scrim" class="hidden"></div>
+  <aside id="settings" class="hidden" aria-label="Settings">
+    <header><h2>Settings</h2><button type="button" id="closeSettings" class="x" aria-label="Close">×</button></header>
+    <div class="scroll">
+    <section>
+      <h3>Talking</h3>
+      <label class="field"><b>Microphone language</b><select id="micLang"></select></label>
+      <label class="sw"><span><b>Hands-free</b><small>Listens for its name. Chrome and Edge.</small></span><input type="checkbox" role="switch" id="wakeOn" checked /></label>
+      <label class="field"><b>Its name</b><input type="text" id="wakeName" value="Nova" maxlength="20" /><small id="wakeHint">Say “Hey Nova, …” any time.</small></label>
+      <label class="sw"><span><b>Interrupt by talking</b><small>Stops speaking when you start.</small></span><input type="checkbox" role="switch" id="bargeIn" checked /></label>
+      <label class="field"><b>Lip-sync timing <span id="lipOffsetVal">0 ms</span></b>
+        <input type="range" id="lipOffset" min="-300" max="300" step="10" value="0" />
+        <small>Mouth late? Slide right. Bluetooth headphones usually need +150 to +250.</small></label>
+    </section>
+    <section>
+      <h3>Face</h3>
+      <label class="sw"><span><b>Eye contact</b><small>Uses your camera to look at you. The video never leaves this device.</small></span><input type="checkbox" role="switch" id="eyeContact" checked /></label>
+      <label class="sw"><span><b>Morphing features</b><small>Blends in features from other people.</small></span><input type="checkbox" role="switch" id="morph" checked /></label>
+      <label class="sw"><span><b>Show face mesh</b><small>Check the mouth and eyes were found.</small></span><input type="checkbox" role="switch" id="showMesh" /></label>
+      <div class="btns">
+        <button type="button" id="faceBtn">Change face…</button>
+        <button type="button" id="faceReset" class="ghost">Default face</button>
+        <input type="file" id="faceFile" accept="image/*" hidden />
+      </div>
+    </section>
+    <section>
+      <h3>Screen</h3>
+      <label class="sw"><span><b>Hologram effects</b></span><input type="checkbox" role="switch" id="holoOn" checked /></label>
+      <label class="sw"><span><b>Facts, timeline and map</b></span><input type="checkbox" role="switch" id="showInfo" checked /></label>
+      <label class="sw"><span><b>AI-generated images</b></span><input type="checkbox" role="switch" id="aiImgs" checked /></label>
+      <label class="sw"><span><b>Subtitles</b></span><input type="checkbox" role="switch" id="showText" checked /></label>
+    </section>
+    <section>
+      <h3>Memory</h3>
+      <label class="sw"><span><b>Remember our conversations</b></span><input type="checkbox" role="switch" id="remember" checked /></label>
+      <details id="memBox"><summary>What it remembers about you</summary><p id="memText"></p></details>
+      <div class="btns">
+        <button type="button" id="forget" class="ghost danger">Forget everything</button>
+        <a id="logout" href="/logout" class="ghost" hidden>Sign out</a>
+      </div>
+    </section>
+    <section>
+      <h3>System</h3>
+      <p id="keys" class="muted"></p>
+    </section>
     </div>
-    <label class="row"><input type="checkbox" id="remember" checked /> Remember our conversations</label>
-    <details id="memBox"><summary class="muted">What it remembers about you</summary><p id="memText" class="muted"></p></details>
-    <div class="row gap">
-      <button type="button" id="forget" class="ghost">Forget everything</button>
-      <a id="logout" href="/logout" class="muted" hidden>Sign out</a>
-    </div>
-    <p id="keys" class="muted"></p>
-    <button type="button" id="closeSettings">Done</button>
   </aside>
 
   <div id="start">
-    <button id="wake">Tap to wake</button>
-    <p class="muted">Then talk or type. Hold <kbd>Space</kbd> to speak.</p>
+    <div class="boot" aria-hidden="true"><span>Neural link</span><span>Voice synthesis</span><span>Live search</span><span>Face rig</span></div>
+    <button id="wake" aria-label="Wake up"><span class="orb"></span><span class="label">Wake up</span></button>
+    <p class="tag">AI search intelligence</p>
+    <p class="hint">Then talk or type. Say “Hey Nova” or hold <kbd>Space</kbd> to speak.</p>
   </div>
 
   <script type="module" src="/app.js"></script>

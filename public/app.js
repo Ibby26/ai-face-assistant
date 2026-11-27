@@ -1,5 +1,7 @@
 import { Face } from './face.js';
 import { shapeAt, shapeFor, mix, SHAPES } from './visemes.js';
+import { Holo } from './holo.js';
+import { Presence } from './presence.js';
 
 const $ = (s) => document.querySelector(s);
 const face = new Face($('#face'));
@@ -374,8 +376,11 @@ function showCard(item) {
   const faceHalf = Math.min(vh, vw * 1.3) * 0.26;
   let x, y;
   if (small) {
+    // phone: the info strip owns the top while it's showing; the background
+    // pictures keep changing anyway, and the face stays clear
+    if (document.body.classList.contains('has-info')) return;
     x = Math.random() * (vw - w);
-    y = Math.random() < 0.5 ? 60 + Math.random() * 60 : vh * 0.62 + Math.random() * (vh * 0.12);
+    y = 60 + Math.random() * 70;
   } else {
     const left = document.body.classList.contains('has-info') || Math.random() < 0.5;
     const minX = left ? 12 : vw / 2 + faceHalf;
@@ -389,7 +394,7 @@ function showCard(item) {
   el.appendChild(item.img.cloneNode());
   const tag = document.createElement('span');
   tag.className = 'tag' + (item.ai ? ' ai' : '');
-  tag.textContent = item.ai ? 'AI · ' + item.caption : item.caption;
+  tag.textContent = item.caption;
   el.appendChild(tag);
   $('#cards').appendChild(el);
   requestAnimationFrame(() => el.classList.add('in'));
@@ -398,6 +403,28 @@ function showCard(item) {
   // keep it tidy
   const all = $('#cards').children;
   if (all.length > 9) all[0].remove();
+}
+
+// ================================================================= hologram + eye contact
+let moodTimer = 0;
+let specBuf = null;
+const holo = new Holo($('#holo'), {
+  getMode: () => face.mode || 'idle',
+  getLevel: () => face.level || 0,
+  getSpectrum: () => {
+    if (!analyser || !speaker.playing) return null;
+    if (!specBuf) specBuf = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(specBuf);
+    return specBuf;
+  },
+  getLabel: () => `${assistantName().toUpperCase()}  ·  ${({ idle: 'ONLINE', listening: 'LISTENING', thinking: 'ANALYZING', speaking: 'TRANSMITTING' })[face.mode] || 'ONLINE'}`,
+});
+const presence = new Presence();
+face.getUser = () => (presence.seen ? presence : null);
+async function startEyes() {
+  if (!$('#eyeContact').checked || !navigator.mediaDevices?.getUserMedia) return;
+  const ok = await presence.start();
+  if (!ok) status('Eye contact is off: the camera is unavailable or blocked.', 4000);
 }
 
 // ================================================================= info panel
@@ -484,6 +511,8 @@ async function ask(question) {
   aiCount = 0;
   $('#sources').innerHTML = '';
   info.reset();
+  face.mood = 'neutral';
+  clearTimeout(moodTimer);
   picsActiveUntil = performance.now() + 60000;
   audioCtx();
 
@@ -503,6 +532,7 @@ async function ask(question) {
     setMode('idle');
     status('');
     picsActiveUntil = performance.now() + 2500;
+    moodTimer = setTimeout(() => { if (!current) face.mood = 'neutral'; }, 5000);
     current = null;
   };
 
@@ -528,6 +558,8 @@ async function ask(question) {
       } else if (event === 'gen') {
         gotGen = true;
         data.prompts.forEach(makeAiImage);
+      } else if (event === 'mood') {
+        face.mood = data.mood;
       } else if (event === 'facts') {
         info.facts(data.items);
       } else if (event === 'timeline') {
@@ -872,10 +904,11 @@ async function warnIfNoFace() {
 async function init() {
   try { config = await (await fetch('/api/config')).json(); } catch {}
   setupLangs();
+  const dot = (ok, text) => `<span style="color:${ok ? 'var(--ok)' : 'var(--danger)'}">●</span> ${text}`;
   $('#keys').innerHTML = [
-    config.claude ? '✅ Claude answers + web search' : '❌ Claude: add ANTHROPIC_API_KEY',
-    config.voice ? '✅ ElevenLabs voice' : '⚠️ Browser voice (add ELEVENLABS_API_KEY for a realistic one)',
-    config.aiImages ? '✅ AI images (fal.ai)' : '⚠️ No AI images (add FAL_KEY)',
+    dot(config.claude, config.claude ? 'Claude answers + live web search' : 'Claude: add ANTHROPIC_API_KEY'),
+    dot(config.voice, config.voice ? 'ElevenLabs voice' : 'Browser voice (add ELEVENLABS_API_KEY for a realistic one)'),
+    dot(config.aiImages, config.aiImages ? 'HD AI images (fal.ai)' : 'No AI images (add FAL_KEY)'),
   ].join('<br>');
   await loadFace();
 }
@@ -890,6 +923,7 @@ $('#wake').onclick = async () => {
   await face.playIntro();
   if (!config.claude) status('Add your ANTHROPIC_API_KEY to the .env file, then restart the server.', 10000);
   if (wake.enabled()) wake.start();
+  startEyes();
   if (!('ontouchstart' in window)) $('#q').focus();
 };
 
@@ -907,14 +941,20 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Space' && document.activeElement !== $('#q') && !e.repeat && $('#start').classList.contains('gone')) {
     e.preventDefault(); spaceHeld = true; if (!micOn()) startMic();
   }
+  if (e.key === 'Escape' && !$('#settings').classList.contains('hidden')) { settingsOpen(false); return; }
   if (e.key === 'Escape') { current?.abort.abort(); current = null; speaker.reset(); setMode('idle'); status(''); }
 });
 addEventListener('keyup', (e) => {
   if (e.code === 'Space' && spaceHeld) { spaceHeld = false; if (micOn()) stopMic(); }
 });
 
-$('#gear').onclick = () => $('#settings').classList.toggle('hidden');
-$('#closeSettings').onclick = () => $('#settings').classList.add('hidden');
+const settingsOpen = (open) => {
+  $('#settings').classList.toggle('hidden', !open);
+  $('#scrim').classList.toggle('hidden', !open);
+};
+$('#gear').onclick = () => settingsOpen($('#settings').classList.contains('hidden'));
+$('#closeSettings').onclick = () => settingsOpen(false);
+$('#scrim').onclick = () => settingsOpen(false);
 $('#morph').onchange = (e) => { face.morphOn = e.target.checked; try { localStorage.setItem('morph', e.target.checked ? '1' : '0'); } catch {} };
 try { if (localStorage.getItem('morph') === '0') { $('#morph').checked = false; face.morphOn = false; } } catch {}
 try { const o = localStorage.getItem('lipOffset'); if (o) $('#lipOffset').value = o; } catch {}
@@ -933,20 +973,28 @@ $('#faceReset').onclick = async () => {
 // hands-free + memory settings (remembered in this browser)
 const saved = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } };
 const store = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
-for (const id of ['wakeOn', 'bargeIn', 'showInfo', 'remember']) {
+for (const id of ['wakeOn', 'bargeIn', 'showInfo', 'remember', 'holoOn', 'eyeContact']) {
   $('#' + id).checked = saved(id, '1') === '1';
   $('#' + id).addEventListener('change', (e) => store(id, e.target.checked ? '1' : '0'));
 }
 if (!SR) { $('#wakeOn').checked = false; $('#wakeOn').disabled = true; $('#wakeHint').textContent = 'Hands-free needs Chrome or Edge.'; }
-$('#wakeName').value = saved('wakeName', '');
+$('#wakeName').value = saved('wakeName', '') || config.name || 'Nova';
 const nameHint = () => {
   $('#wakeHint').textContent = SR ? `Say “Hey ${assistantName()}, …” any time. Works in Chrome and Edge.` : 'Hands-free needs Chrome or Edge.';
-  $('#q').placeholder = wake.enabled() ? `Ask me anything… or say “Hey ${assistantName()}”` : 'Ask me anything…';
+  $('#q').placeholder = wake.enabled() && innerWidth > 640 ? `Ask anything, or say “Hey ${assistantName()}”` : 'Ask me anything…';
+  $('#earName').textContent = `Hey ${assistantName()}`;
+  $('#wake .label').textContent = `Wake ${assistantName()}`;
+  $('#start .hint').innerHTML = SR ? `Then talk or type. Say “Hey ${assistantName()}” or hold <kbd>Space</kbd> to speak.` : 'Then talk or type. Hold <kbd>Space</kbd> to speak.';
 };
 $('#wakeName').onchange = () => { store('wakeName', $('#wakeName').value.trim()); nameHint(); if (wake.want) { wake.stop(); wake.start(); } };
 $('#wakeOn').addEventListener('change', (e) => { nameHint(); if (e.target.checked) wake.start(); else wake.stop(); });
 $('#showInfo').addEventListener('change', (e) => { if (!e.target.checked) { $('#info').classList.add('hidden'); document.body.classList.remove('has-info'); } });
+const holoMode = () => { holo.on = $('#holoOn').checked; document.body.classList.toggle('holo', holo.on); };
+$('#holoOn').addEventListener('change', holoMode);
+holoMode();
+$('#eyeContact').addEventListener('change', (e) => { if (e.target.checked) startEyes(); else presence.stop(); });
 $('#infoClose').onclick = () => { $('#info').classList.add('hidden'); document.body.classList.remove('has-info'); };
+nameHint();
 ready.then(nameHint);
 
 async function loadMemory() {
@@ -972,4 +1020,4 @@ $('#forget').onclick = async () => {
 if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') $('#logout').hidden = false;
 
 // handy for testing: window.ai.ask('...')
-window.ai = { ask, face, speaker, wake, info, actx: () => actx };
+window.ai = { ask, face, speaker, wake, info, holo, presence, actx: () => actx };
