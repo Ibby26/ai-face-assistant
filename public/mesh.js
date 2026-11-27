@@ -82,29 +82,34 @@ export function buildRig(W, H, lm) {
   // 1) mouth seam: dense inner-lip contours, nudged 0.7px apart so the opening
   //    exists (as a hairline) even when the mouth is closed in the photo
   const up = resample(lm.innerUp, 30), low = resample(lm.innerLow, 30);
-  const cornerA = add(up[0].x, up[0].y, { role: 'corner' });
+  const cornerA = add(up[0].x, up[0].y, { role: 'corner', r: { t: 'seamC', k: 0 } });
   const upIdx = [cornerA], lowIdx = [cornerA], pairs = [];
   for (let k = 1; k < 29; k++) {
-    const a = add(up[k].x, Math.min(up[k].y, low[k].y) - 0.7, { role: 'up' });
-    const b = add(low[k].x, Math.max(up[k].y, low[k].y) + 0.7, { role: 'low' });
+    const a = add(up[k].x, Math.min(up[k].y, low[k].y) - 0.7, { role: 'up', r: { t: 'seamU', k } });
+    const b = add(low[k].x, Math.max(up[k].y, low[k].y) + 0.7, { role: 'low', r: { t: 'seamL', k } });
     upIdx.push(a); lowIdx.push(b); pairs.push([a, b, pts[b].y - pts[a].y]);
   }
-  const cornerB = add(up[29].x, up[29].y, { role: 'corner' });
+  const cornerB = add(up[29].x, up[29].y, { role: 'corner', r: { t: 'seamC', k: 29 } });
   upIdx.push(cornerB); lowIdx.push(cornerB);
 
   // 2) eyelids, densified; remember the lower lid under each upper-lid point
   lm.eyes.forEach((e, ei) => {
     const u = resample(e.up, 13), l = resample(e.low, 13);
     for (let k = 1; k < 12; k++) {
-      add(u[k].x, u[k].y, { role: 'lid', eye: ei, lowY: l[k].y });
-      add(l[k].x, l[k].y, { role: 'lowlid', eye: ei });
+      add(u[k].x, u[k].y, { role: 'lid', eye: ei, lowY: l[k].y, r: { t: 'lidU', e: ei, k } });
+      add(l[k].x, l[k].y, { role: 'lowlid', eye: ei, r: { t: 'lidL', e: ei, k } });
     }
-    add(u[0].x, u[0].y, { eye: ei }); add(u[12].x, u[12].y, { eye: ei });
+    add(u[0].x, u[0].y, { eye: ei, r: { t: 'lidU', e: ei, k: 0 } });
+    add(u[12].x, u[12].y, { eye: ei, r: { t: 'lidU', e: ei, k: 12 } });
   });
 
   // 3) every other landmark, skipping ones too close to points we already have
   const near = (x, y, r) => pts.some((p) => (p.x - x) ** 2 + (p.y - y) ** 2 < r * r);
-  for (const p of lm.other) if (!near(p.x, p.y, mw * 0.035)) add(p.x, p.y);
+  lm.other.forEach((p, j) => {
+    if (near(p.x, p.y, mw * 0.035)) return;
+    const i = lm.otherIdx?.[j];
+    add(p.x, p.y, { r: i == null ? { t: 'fixed' } : { t: 'lm', i } });
+  });
 
   // 4) a light grid over the rest of the picture (hair, neck, background),
   //    plus the borders, so the whole image is one seamless mesh
@@ -114,7 +119,7 @@ export function buildRig(W, H, lm) {
       const x = (c / g) * W, y = (r / g) * H;
       const border = r === 0 || c === 0 || r === g || c === g;
       const inFace = ((x - faceCx) / (faceRx * 1.15)) ** 2 + ((y - faceCy) / (faceRy * 1.15)) ** 2 < 1;
-      if (border || (!inFace && !near(x, y, mw * 0.25))) add(x, y, border ? { role: 'border' } : {});
+      if (border || (!inFace && !near(x, y, mw * 0.25))) add(x, y, border ? { role: 'border', r: { t: 'fixed' } } : { r: { t: 'fixed' } });
     }
   }
 
@@ -178,13 +183,33 @@ export function buildRig(W, H, lm) {
   return { pts, skin, cavity, pairs, metrics: m, openInPhoto: restGap > mw * 0.05 };
 }
 
+// Where each mesh point lands on another face (same recipe, other landmarks).
+// Points with no facial meaning ('fixed') come back as NaN.
+export function placeOn(rig, lm) {
+  const up = resample(lm.innerUp, 30), low = resample(lm.innerLow, 30);
+  const lids = lm.eyes.map((e) => ({ u: resample(e.up, 13), l: resample(e.low, 13) }));
+  const out = new Float32Array(rig.pts.length * 2);
+  rig.pts.forEach((p, i) => {
+    const r = p.r || { t: 'fixed' };
+    let q = null;
+    if (r.t === 'lm') q = lm.points[r.i];
+    else if (r.t === 'seamC') q = r.k === 0 ? up[0] : up[29];
+    else if (r.t === 'seamU') q = { x: up[r.k].x, y: Math.min(up[r.k].y, low[r.k].y) };
+    else if (r.t === 'seamL') q = { x: low[r.k].x, y: Math.max(up[r.k].y, low[r.k].y) };
+    else if (r.t === 'lidU') q = lids[r.e].u[r.k];
+    else if (r.t === 'lidL') q = lids[r.e].l[r.k];
+    out[i * 2] = q ? q.x : NaN; out[i * 2 + 1] = q ? q.y : NaN;
+  });
+  return out;
+}
+
 // ------------------------------------------------------------------ WebGL
 const VS = `
-attribute vec2 aPos; attribute vec2 aUV; attribute vec2 aCav; attribute vec2 aGap;
+attribute vec2 aPos; attribute vec2 aUV; attribute vec2 aBaseUV; attribute vec2 aCav; attribute vec2 aGap; attribute float aW;
 uniform vec2 uSize;
-varying vec2 vUV; varying vec2 vCav; varying vec2 vGap;
+varying vec2 vUV; varying vec2 vBaseUV; varying vec2 vCav; varying vec2 vGap; varying float vW;
 void main() {
-  vUV = aUV; vCav = aCav; vGap = aGap;
+  vUV = aUV; vBaseUV = aBaseUV; vCav = aCav; vGap = aGap; vW = aW;
   vec2 c = aPos / uSize * 2.0 - 1.0;
   gl_Position = vec4(c.x, -c.y, 0.0, 1.0);
 }`;
@@ -192,9 +217,21 @@ const FS = `
 precision mediump float;
 uniform sampler2D uTex; uniform float uMode; uniform float uTeeth; uniform float uOpen;
 uniform vec3 uLip; uniform float uReal; uniform vec2 uScreen;
-varying vec2 vUV; varying vec2 vCav; varying vec2 vGap;
+uniform sampler2D uBlur; uniform sampler2D uBaseBlur; uniform float uKeep;
+varying vec2 vUV; varying vec2 vBaseUV; varying vec2 vCav; varying vec2 vGap; varying float vW;
 void main() {
-  if (uMode < 0.5) { gl_FragColor = texture2D(uTex, vUV); return; }
+  if (uMode < 0.5) {
+    // one face's contribution (several faces are added together when morphing).
+    // Another person's fine detail (eye shape, iris, brows, lips, skin texture)
+    // is laid over the main photo's skin tone and lighting, so it all reads
+    // as one face. uKeep = how much of their own colouring they keep.
+    vec3 c = texture2D(uTex, vUV).rgb;
+    vec3 cb = texture2D(uBlur, vUV).rgb;
+    vec3 bb = texture2D(uBaseBlur, vBaseUV).rgb;
+    vec3 col = clamp(c - cb + mix(bb, cb, uKeep), 0.0, 1.0);
+    gl_FragColor = vec4(col * vW, 1.0);
+    return;
+  }
   // inside of the mouth: deep shadow, soft upper teeth, a hint of tongue
   float u = clamp(abs(vCav.x), 0.0, 1.0);
   float v = clamp(vCav.y, 0.0, 1.0);
@@ -223,7 +260,7 @@ export class MeshRenderer {
     this.W = W; this.H = H; this.rig = rig;
     const c = (this.canvas = document.createElement('canvas'));
     c.width = W; c.height = H;
-    const gl = (this.gl = c.getContext('webgl', { premultipliedAlpha: false, preserveDrawingBuffer: true, antialias: true }));
+    const gl = (this.gl = c.getContext('webgl', { premultipliedAlpha: false, preserveDrawingBuffer: true, antialias: true, stencil: true }));
     if (!gl) throw new Error('WebGL not available');
     const sh = (type, src) => {
       const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
@@ -253,23 +290,32 @@ export class MeshRenderer {
       return b;
     };
     this.posBuf = buf(this.pos, 'aPos', true);
+    this.ones = new Float32Array(n).fill(1);
+    this.wBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.wBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, this.ones, gl.DYNAMIC_DRAW);
+    this.wLoc = gl.getAttribLocation(prog, 'aW');
+    gl.enableVertexAttribArray(this.wLoc);
+    gl.vertexAttribPointer(this.wLoc, 1, gl.FLOAT, false, 0, 0);
     this.gap = new Float32Array(n * 2);
     for (const [a, b, g0] of rig.pairs) { this.gap[a * 2] = this.gap[b * 2] = g0; }
     this.gapBuf = buf(this.gap, 'aGap', true);
-    buf(uv, 'aUV');
+    this.uvLoc = gl.getAttribLocation(prog, 'aUV');
+    const baseUV = buf(uv, 'aUV');
+    buf(uv, 'aBaseUV');
     buf(cav, 'aCav');
     const idx = (arr) => { const b = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(arr), gl.STATIC_DRAW); return { b, n: arr.length }; };
     this.skin = idx(rig.skin);
     this.cav = idx(rig.cavity);
-    const tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+    // faces[0] is the main photo; morph donors are added with addFace()
+    this.faces = [{ tex: this._texture(image), blur: this._texture(blurred(image)), uv: baseUV, keep: 1 }];
     this.u = {};
-    for (const k of ['uSize', 'uTex', 'uMode', 'uTeeth', 'uOpen', 'uLip', 'uReal', 'uScreen']) this.u[k] = gl.getUniformLocation(prog, k);
+    for (const k of ['uSize', 'uTex', 'uMode', 'uTeeth', 'uOpen', 'uLip', 'uReal', 'uScreen', 'uBlur', 'uBaseBlur', 'uKeep']) this.u[k] = gl.getUniformLocation(prog, k);
+    gl.uniform1i(this.u.uBlur, 1);
+    gl.uniform1i(this.u.uBaseBlur, 2);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.faces[0].blur);
+    gl.activeTexture(gl.TEXTURE0);
     gl.uniform2f(this.u.uSize, W, H);
     gl.uniform2f(this.u.uScreen, W, H);
     gl.uniform1i(this.u.uTex, 0);
@@ -279,8 +325,33 @@ export class MeshRenderer {
     gl.viewport(0, 0, W, H);
   }
 
+  _texture(image) {
+    const gl = this.gl;
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+    return tex;
+  }
+
+  // another person's face: its picture, where each mesh point sits on it
+  // (texture coords 0..1), and a colour correction to match skin tones
+  addFace(image, uv, keep = 0.35) {
+    const gl = this.gl;
+    const b = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.bufferData(gl.ARRAY_BUFFER, uv, gl.STATIC_DRAW);
+    this.faces.push({ tex: this._texture(image), blur: this._texture(blurred(image)), uv: b, keep });
+    return this.faces.length - 1;
+  }
+
   // open 0..1, width (1 relaxed, <1 round, >1 spread), teeth 0..1, blink 0..1
-  render({ open = 0, width = 1, teeth = 0.5, blink = 0 }) {
+  // rest: morphed face shape (or null = the photo's own shape)
+  // layers: [{face, w: Float32Array per point}] weights that add up to 1
+  render({ open = 0, width = 1, teeth = 0.5, blink = 0, rest = null, layers = null }) {
     const { gl, rig, pos } = this;
     const { mx, my, mw } = rig.metrics;
     const gap = open * mw * 0.23;
@@ -288,7 +359,7 @@ export class MeshRenderer {
     const pts = rig.pts;
     for (let i = 0; i < pts.length; i++) {
       const p = pts[i];
-      let x = p.x, y = p.y;
+      let x = rest ? rest[i * 2] : p.x, y = rest ? rest[i * 2 + 1] : p.y;
       if (p.wJaw) y += gap * p.wJaw;
       if (p.wUpLip) y -= gap * 0.13 * p.wUpLip;
       if (p.wLips) {
@@ -308,8 +379,37 @@ export class MeshRenderer {
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.uniform1f(this.u.uMode, 0);
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.ONE, gl.ONE, gl.ZERO, gl.ONE);
+    // where the mesh folds over itself, count each pixel only once per face
+    const multi = layers && layers.length > 1;
+    if (multi) {
+      gl.enable(gl.STENCIL_TEST);
+      gl.stencilFunc(gl.EQUAL, 0, 0xff);
+      gl.stencilOp(gl.KEEP, gl.KEEP, gl.INCR);
+    }
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.skin.b);
-    gl.drawElements(gl.TRIANGLES, this.skin.n, gl.UNSIGNED_SHORT, 0);
+    for (const layer of layers || [{ face: 0, w: this.ones }]) {
+      const f = this.faces[layer.face];
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.wBuf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, layer.w);
+      gl.bindBuffer(gl.ARRAY_BUFFER, f.uv);
+      gl.vertexAttribPointer(this.uvLoc, 2, gl.FLOAT, false, 0, 0);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, f.blur);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, f.tex);
+      gl.uniform1f(this.u.uKeep, f.keep);
+      if (multi) gl.clear(gl.STENCIL_BUFFER_BIT);
+      gl.drawElements(gl.TRIANGLES, this.skin.n, gl.UNSIGNED_SHORT, 0);
+    }
+    gl.disable(gl.STENCIL_TEST);
+    gl.disable(gl.BLEND);
+    // mouth interior uses the main photo's own picture
+    const base = this.faces[0];
+    gl.bindBuffer(gl.ARRAY_BUFFER, base.uv);
+    gl.vertexAttribPointer(this.uvLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.bindTexture(gl.TEXTURE_2D, base.tex);
     gl.uniform1f(this.u.uMode, 1);
     gl.uniform1f(this.u.uTeeth, teeth);
     gl.uniform1f(this.u.uOpen, open);
@@ -336,6 +436,26 @@ export class MeshRenderer {
     tri(rig.cavity, 'rgba(255,80,120,0.9)');
     ctx.restore();
   }
+}
+
+// a very soft version of a picture (its overall colour and lighting)
+function blurred(image) {
+  const s = 40 / Math.max(image.width, image.height);
+  const c = document.createElement('canvas');
+  c.width = Math.max(2, Math.round(image.width * s)); c.height = Math.max(2, Math.round(image.height * s));
+  const x = c.getContext('2d');
+  x.imageSmoothingQuality = 'high';
+  // shrink in steps so every pixel is averaged
+  let src = image, w = image.width, h = image.height;
+  while (w / 2 > c.width) {
+    const t = document.createElement('canvas');
+    t.width = Math.round(w / 2); t.height = Math.round(h / 2);
+    const tx = t.getContext('2d'); tx.imageSmoothingQuality = 'high';
+    tx.drawImage(src, 0, 0, t.width, t.height);
+    src = t; w = t.width; h = t.height;
+  }
+  x.drawImage(src, 0, 0, c.width, c.height);
+  return c;
 }
 
 // average lip colour, used to tint the mouth corners naturally
@@ -375,6 +495,7 @@ export function landmarksFromMediaPipe(p, W, H) {
     innerLow: INNER_LOW.map((i) => P[i]),
     eyes,
     other: P.filter((_, i) => !used.has(i)),
+    otherIdx: P.map((_, i) => i).filter((i) => !used.has(i)),
     points: P,
     metrics: {
       mx: (P[13].x + P[14].x) / 2,

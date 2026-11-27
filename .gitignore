@@ -2,3 +2,5 @@ node_modules
 .env
 public/face.jpg
 public/models/
+public/faces/*
+!public/faces/README.txt

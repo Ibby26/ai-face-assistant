@@ -51,6 +51,14 @@ Best results: a front-facing photo, face roughly centered, mouth closed, good li
 
 On the first start, if there is no face yet, the server downloads a free one from thispersondoesnotexist.com (an AI-generated person, so it's nobody real).
 
+## The morphing face
+
+The face never stops changing: its eyes, brows, nose, lips, cheekbones and jawline each slowly turn into features from other people, one after another, while the gaze stays steady. Skin tone and lighting always come from your main photo, so it reads as one living face.
+
+- On first start the server downloads 8 AI-generated faces (people who don't exist) into `public/faces`.
+- Add your own photos to `public/faces` (front-facing works best) and refresh. Photos there are never committed to git.
+- Turn it off any time in Settings → **Morph between different people's features**.
+
 ## Speed settings
 
 The app is built for speed: the answer streams word by word, each sentence is turned into speech the moment it's written, and pictures appear before the answer is even ready.

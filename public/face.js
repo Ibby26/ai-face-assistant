@@ -4,6 +4,7 @@
 // landmarks are found automatically by MediaPipe, served from this app.
 
 import { buildRig, MeshRenderer, landmarksFromMediaPipe, syntheticLandmarks } from './mesh.js';
+import { Morph } from './morph.js';
 
 const DEFAULT_MARKS = {
   mouth: { x: 0.5, y: 0.715, w: 0.17 },
@@ -52,6 +53,8 @@ export class Face {
     this.live = false;
     this.debug = false;
     this.found = false; // true when real landmarks were found
+    this.morph = null;
+    this.morphOn = true; // keep blending in features from other faces
     this._loop = this._loop.bind(this);
   }
 
@@ -67,6 +70,7 @@ export class Face {
     this.W = W; this.H = H;
     this.canvas.width = W; this.canvas.height = H;
     this.renderer = null;
+    this.morph = null;
     this.found = false;
     const token = (this._token = {});
     // build the rig in the background while the intro plays
@@ -90,6 +94,37 @@ export class Face {
     if (token !== this._token) return;
     const rig = buildRig(W, H, lm);
     this.renderer = new MeshRenderer(W, H, canvas, rig);
+    if (this.found) {
+      this.morph = new Morph(rig, lm, canvas, this.renderer);
+      this._loadDonors(token);
+    }
+  }
+
+  // other people's faces for the morph: /api/faces lists them (the server
+  // collects a few AI faces on first start, plus any you put in public/faces)
+  async _loadDonors(token) {
+    const done = new Set();
+    for (let round = 0; round < 15 && token === this._token; round++) {
+      let list = [];
+      try { list = (await (await fetch('/api/faces')).json()).faces || []; } catch {}
+      for (const url of list) {
+        if (done.has(url) || token !== this._token) continue;
+        done.add(url);
+        try {
+          const img = await loadImage(url);
+          const s = Math.min(1, 900 / Math.max(img.naturalWidth, img.naturalHeight));
+          const c = document.createElement('canvas');
+          c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
+          c.getContext('2d', { willReadFrequently: true }).drawImage(img, 0, 0, c.width, c.height);
+          const det = await getLandmarker();
+          const p = det.detect(c).faceLandmarks?.[0];
+          if (!p || token !== this._token) continue;
+          this.morph.addDonor(c, landmarksFromMediaPipe(p, c.width, c.height));
+        } catch (e) { console.warn('Skipping face', url, e); }
+      }
+      if (list.length >= 8 && done.size >= list.length) break;
+      await new Promise((r) => setTimeout(r, 8000));
+    }
   }
 
   // ------------------------------------------------------------ intro
@@ -236,7 +271,8 @@ export class Face {
     const blink = this._blinkAmount(now);
 
     if (this.renderer) {
-      ctx.drawImage(this.renderer.render({ open: this.level, width: this.width, teeth: this.teeth, blink }), 0, 0);
+      const m = this.morphOn && this.morph ? this.morph.update(now) : null;
+      ctx.drawImage(this.renderer.render({ open: this.level, width: this.width, teeth: this.teeth, blink, rest: m?.rest, layers: m?.layers }), 0, 0);
       if (this.debug) this.renderer.drawDebug(ctx);
     } else {
       ctx.drawImage(this.img, 0, 0);

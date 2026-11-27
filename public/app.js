@@ -676,6 +676,8 @@ addEventListener('keyup', (e) => {
 
 $('#gear').onclick = () => $('#settings').classList.toggle('hidden');
 $('#closeSettings').onclick = () => $('#settings').classList.add('hidden');
+$('#morph').onchange = (e) => { face.morphOn = e.target.checked; try { localStorage.setItem('morph', e.target.checked ? '1' : '0'); } catch {} };
+try { if (localStorage.getItem('morph') === '0') { $('#morph').checked = false; face.morphOn = false; } } catch {}
 $('#showMesh').onchange = (e) => { face.debug = e.target.checked; };
 $('#showText').onchange = (e) => $('#subtitle').classList.toggle('off', !e.target.checked);
 $('#faceBtn').onclick = () => $('#faceFile').click();

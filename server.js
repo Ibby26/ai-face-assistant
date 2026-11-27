@@ -43,6 +43,40 @@ function findFace() {
   return null;
 }
 
+// ---------------------------------------------------------------- morph faces
+// Other people's faces the main face keeps morphing into. Put your own photos
+// in public/faces; a few AI-generated faces are added automatically.
+const FACES_DIR = path.join(PUBLIC, 'faces');
+app.get('/api/faces', (_req, res) => {
+  let files = [];
+  try { files = fs.readdirSync(FACES_DIR).filter((f) => /\.(jpe?g|png|webp)$/i.test(f)); } catch {}
+  res.json({ faces: files.sort().map((f) => '/faces/' + encodeURIComponent(f)) });
+});
+
+async function ensureDonorFaces(target = 8) {
+  fs.mkdirSync(FACES_DIR, { recursive: true });
+  const have = () => fs.readdirSync(FACES_DIR).filter((f) => /\.(jpe?g|png|webp)$/i.test(f));
+  const sizes = new Set(have().map((f) => fs.statSync(path.join(FACES_DIR, f)).size));
+  let added = 0;
+  for (let tries = 0; have().length < target && tries < target * 2; tries++) {
+    try {
+      const r = await fetch('https://thispersondoesnotexist.com/', { headers: { 'User-Agent': 'Mozilla/5.0', 'Cache-Control': 'no-cache' } });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (!sizes.has(buf.length)) {
+        sizes.add(buf.length);
+        fs.writeFileSync(path.join(FACES_DIR, `ai-${Date.now()}.jpg`), buf);
+        added++;
+      }
+    } catch (err) {
+      console.warn('Could not download a morph face:', err.message);
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 1500)); // a new face is generated every second or so
+  }
+  if (added) console.log(`Added ${added} AI faces for the morph (public/faces).`);
+}
+
 // ---------------------------------------------------------------- ask (SSE)
 const systemPrompt = () => `You are a friendly, brilliant AI search assistant with a human face. The user sees your face and hears you speak, so everything you write is read aloud.
 
@@ -332,6 +366,7 @@ async function ensureLandmarkModel() {
 }
 
 await Promise.all([ensureFace(), ensureLandmarkModel()]);
+ensureDonorFaces().catch(() => {}); // in the background; the app picks them up as they arrive
 app.listen(PORT, () => {
   console.log(`\n  AI Face is running:  http://localhost:${PORT}\n`);
   console.log(`  Claude: ${anthropic ? 'ready (' + MODEL + ', ' + SPEED + ')' : 'MISSING ANTHROPIC_API_KEY'}`);
