@@ -26,7 +26,14 @@ export class Face {
     this.wctx = this.work.getContext('2d');
     this.marks = structuredClone(DEFAULT_MARKS);
     this.level = 0; // smoothed mouth opening 0..1
+    this.width = 1; // smoothed lip width (<1 rounded, >1 spread)
+    this.teeth = 0; // smoothed teeth visibility
     this.getLevel = () => 0; // set from outside (audio loudness)
+    this.getShape = () => null; // set from outside: {open, width, teeth} for the current sound
+    this.frame = document.createElement('canvas');
+    this.fctx = this.frame.getContext('2d');
+    this.work2 = document.createElement('canvas');
+    this.w2ctx = this.work2.getContext('2d');
     this.mode = 'idle'; // idle | listening | thinking | speaking
     this.blink = { next: performance.now() + 2500, start: 0 };
     this.live = false;
@@ -45,6 +52,7 @@ export class Face {
     this.img = src2;
     this.W = W; this.H = H;
     this.canvas.width = W; this.canvas.height = H;
+    this.frame.width = W; this.frame.height = H;
     this.marks = structuredClone(DEFAULT_MARKS);
     this._buildMasks();
     this.detectPromise = this._detect(src2, src).catch((e) => console.warn('Face landmarks unavailable, using defaults.', e));
@@ -63,6 +71,16 @@ export class Face {
     const mc = m.getContext('2d');
     mc.fillStyle = g; mc.fillRect(0, 0, 256, 4);
     this.hMask = m;
+    // soft oval used when reshaping the lips
+    const o = document.createElement('canvas');
+    o.width = o.height = 256;
+    const oc = o.getContext('2d');
+    const rg = oc.createRadialGradient(128, 128, 0, 128, 128, 128);
+    rg.addColorStop(0, 'rgba(0,0,0,1)');
+    rg.addColorStop(0.72, 'rgba(0,0,0,1)');
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    oc.fillStyle = rg; oc.fillRect(0, 0, 256, 256);
+    this.oMask = o;
   }
 
   // ------------------------------------------------------------ landmarks
@@ -233,13 +251,21 @@ export class Face {
       this.ctx.fillRect(0, 0, this.W, this.H);
       return;
     }
-    // smooth mouth: fast open, softer close
-    const target = clamp(this.getLevel());
-    this.level += (target - this.level) * (target > this.level ? 0.55 : 0.28);
+    // mouth: follow the shape of the current sound (or just loudness),
+    // fast to open, a little softer to close
+    const shape = this.getShape();
+    const tOpen = clamp(shape ? shape.open : this.getLevel());
+    const tWidth = shape ? shape.width : 1 + this.level * 0.04;
+    const tTeeth = shape ? shape.teeth : 0.5;
+    this.level += (tOpen - this.level) * (tOpen > this.level ? 0.6 : 0.38);
+    this.width += (tWidth - this.width) * 0.4;
+    this.teeth += (tTeeth - this.teeth) * 0.4;
 
-    const { ctx, img, W, H } = this;
-    ctx.drawImage(img, 0, 0);
-    this._drawMouth(this.level);
+    const { ctx, img, W, H, fctx } = this;
+    fctx.drawImage(img, 0, 0);
+    this._drawLipWidth(this.width);
+    ctx.drawImage(this.frame, 0, 0);
+    this._drawMouth(this.level, this.width, this.teeth);
     this._drawBlink(now);
     if (this.mode === 'thinking') this._drawScan(now);
 
@@ -252,16 +278,39 @@ export class Face {
     this.canvas.style.transform = `translate(${tx}px, ${ty}px) rotate(${rot}deg) scale(${sc})`;
   }
 
-  _drawMouth(level) {
+  // Squeeze the lips together (o, u, w) or spread them (ee, s) by resampling the
+  // area around the mouth: a wider/narrower window of the face is drawn into a
+  // fixed oval, so cheeks move with the lips and no old lip corners show.
+  _drawLipWidth(width) {
+    if (Math.abs(width - 1) < 0.01) return;
+    const { W, H, marks, fctx, work2, w2ctx, img } = this;
+    const mx = marks.mouth.x * W, my = marks.mouth.y * H, mw = marks.mouth.w * W;
+    const bw = mw * 0.9, bh = mw * 0.4; // half sizes of the oval
+    // never reach past the cheeks into the face outline or background
+    const sw = Math.min(bw / width, mw * 1.12);
+    const w = Math.ceil(bw * 2), h = Math.ceil(bh * 2);
+    if (work2.width < w) work2.width = w;
+    if (work2.height < h) work2.height = h;
+    w2ctx.globalCompositeOperation = 'copy';
+    // rounded lips also push forward a touch, so make them slightly taller
+    const sh = bh / (1 + Math.max(0, 1 - width) * 0.25);
+    w2ctx.drawImage(img, mx - sw, my - sh, sw * 2, sh * 2, 0, 0, w, h);
+    w2ctx.globalCompositeOperation = 'destination-in';
+    w2ctx.drawImage(this.oMask, 0, 0, w, h);
+    w2ctx.globalCompositeOperation = 'source-over';
+    fctx.drawImage(work2, 0, 0, w, h, mx - bw, my - bh, w, h);
+  }
+
+  _drawMouth(level, width = 1, teeth = 0.5) {
     if (level < 0.015) return;
-    const { ctx, img, W, H, marks, work, wctx } = this;
+    const { ctx, W, H, marks } = this;
     const mx = marks.mouth.x * W, my = marks.mouth.y * H, mw = marks.mouth.w * W;
     const chin = marks.chinY * H;
     const open = level * mw * 0.36;
     const up = open * 0.14;
 
     // 1) dark inside of the mouth, with a hint of teeth and tongue
-    const rx = mw * (0.4 + level * 0.06);
+    const rx = mw * (0.4 + level * 0.06) * Math.pow(width, 1.3);
     const top = my - up, bot = my + open;
     const cy = (top + bot) / 2, ry = Math.max(1, (bot - top) / 2);
     ctx.save();
@@ -274,12 +323,12 @@ export class Face {
     g.addColorStop(1, '#4a1a1c');
     ctx.fillStyle = g;
     ctx.fillRect(mx - rx, top, rx * 2, bot - top);
-    const teethH = Math.min((bot - top) * 0.3, mw * 0.07);
+    const teethH = Math.min((bot - top) * (0.2 + 0.5 * teeth), mw * 0.075) * (0.3 + 0.7 * teeth);
     const tg = ctx.createLinearGradient(0, top, 0, top + teethH);
     tg.addColorStop(0, 'rgba(235,228,218,0.92)');
     tg.addColorStop(1, 'rgba(190,180,170,0.55)');
     ctx.fillStyle = tg;
-    ctx.fillRect(mx - rx * 0.7, top, rx * 1.4, teethH);
+    if (teethH > 0.5) ctx.fillRect(mx - rx * 0.75, top, rx * 1.5, teethH);
     ctx.fillStyle = 'rgba(150,50,60,0.55)';
     ctx.beginPath();
     ctx.ellipse(mx, bot, rx * 0.6, (bot - top) * 0.35, 0, Math.PI, Math.PI * 2);
@@ -287,7 +336,7 @@ export class Face {
     ctx.restore();
 
     // 2) upper lip lifts a little
-    const sw = mw * 2.4, sx = mx - sw / 2;
+    const sw = mw * 2.4 * Math.max(1, width), sx = mx - sw / 2;
     const uTop = my - (my - marks.noseY * H) * 0.7;
     this._strip(sx, uTop, sw, my - uTop, uTop, my - up - uTop);
 
@@ -299,7 +348,8 @@ export class Face {
   // draw an image strip stretched vertically, feathered at the left/right edges
   _strip(sx, sy, sw, sh, dy, dh) {
     if (sh < 1 || dh < 1) return;
-    const { work, wctx, ctx, img } = this;
+    const { work, wctx, ctx } = this;
+    const img = this.frame;
     const w = Math.ceil(sw), h = Math.ceil(dh);
     if (work.width < w) work.width = w;
     if (work.height < h) work.height = h;

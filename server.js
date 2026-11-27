@@ -202,18 +202,20 @@ function friendlyError(err) {
 }
 
 // ---------------------------------------------------------------- voice (TTS)
-// Streams MP3 for one sentence. The browser asks for each sentence as soon as
-// Claude has written it, so the face starts talking almost immediately.
+// Speech for one sentence plus the exact time each letter is spoken, so the
+// mouth can form the right shape for every sound. The browser asks for each
+// sentence as soon as Claude has written it, so the face starts talking almost
+// immediately.
 app.post('/api/tts', async (req, res) => {
   if (!ELEVEN_KEY) return res.status(404).json({ error: 'no voice key' });
   const text = String(req.body?.text || '').slice(0, 2000);
   if (!text.trim()) return res.status(400).end();
   try {
     const r = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(ELEVEN_VOICE)}/stream?output_format=mp3_44100_128&optimize_streaming_latency=3`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(ELEVEN_VOICE)}/with-timestamps?output_format=mp3_44100_128`,
       {
         method: 'POST',
-        headers: { 'xi-api-key': ELEVEN_KEY, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
+        headers: { 'xi-api-key': ELEVEN_KEY, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text,
           model_id: 'eleven_flash_v2_5', // lowest latency, 32 languages
@@ -227,18 +229,18 @@ app.post('/api/tts', async (req, res) => {
       console.error('ElevenLabs error', r.status, msg.slice(0, 300));
       return res.status(502).json({ error: 'tts failed' });
     }
-    res.setHeader('Content-Type', 'audio/mpeg');
-    const reader = r.body.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      res.write(Buffer.from(value));
-    }
-    res.end();
+    const j = await r.json();
+    // normalized_alignment is what was actually spoken ("1939" -> "nineteen thirty-nine")
+    const al = j.normalized_alignment?.characters?.length ? j.normalized_alignment : j.alignment;
+    res.json({
+      audio: j.audio_base64,
+      chars: al?.characters || [],
+      starts: al?.character_start_times_seconds || [],
+      ends: al?.character_end_times_seconds || [],
+    });
   } catch (err) {
     console.error('tts error', err?.message);
     if (!res.headersSent) res.status(502).json({ error: 'tts failed' });
-    else res.end();
   }
 });
 

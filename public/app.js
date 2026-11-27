@@ -1,4 +1,5 @@
 import { Face } from './face.js';
+import { shapeAt, shapeFor, mix, SHAPES } from './visemes.js';
 
 const $ = (s) => document.querySelector(s);
 const face = new Face($('#face'));
@@ -38,6 +39,31 @@ face.getLevel = () => {
 };
 const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
 
+// Mouth shape for the sound being spoken right now.
+// ElevenLabs tells us when every letter is spoken; loudness adds natural energy.
+face.getShape = () => {
+  const cur = speaker.cur;
+  if (cur?.align && speaker.playing && actx) {
+    const t = actx.currentTime - cur.startAt - (actx.outputLatency || actx.baseLatency || 0) + 0.04;
+    const s = shapeAt(cur.align, t);
+    const amp = face.getLevel();
+    const energy = s.open > 0 ? 0.6 + 0.6 * clamp(amp * 1.6) : 1;
+    return { open: clamp(s.open * energy), width: s.width, teeth: s.teeth };
+  }
+  if (fakeTalk && browserWord.text) {
+    // browser voice: we only know which word is being said, so step through
+    // its letters at a natural speaking pace
+    const t = (performance.now() - browserWord.at) / 1000;
+    const i = Math.floor(t * 13);
+    if (i >= browserWord.text.length) return SHAPES.rest;
+    const a = shapeFor(browserWord.text[i], i) || SHAPES.rest;
+    const b = shapeFor(browserWord.text[i + 1], i + 1) || SHAPES.rest;
+    return mix(a, b, clamp((t * 13 - i - 0.5) * 0.8));
+  }
+  return null; // fall back to loudness only
+};
+const browserWord = { text: '', at: 0 };
+
 class Speaker {
   constructor() { this.reset(); }
   reset() {
@@ -46,6 +72,7 @@ class Speaker {
     this.playing = false;
     this.node?.stop?.();
     this.node = null;
+    this.cur = null;
     if (window.speechSynthesis) speechSynthesis.cancel();
     fakeTalk = false;
     this.pending = '';
@@ -91,8 +118,13 @@ class Speaker {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, previous: this.spoken.slice(-300) }),
       })
-        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('tts ' + r.status))))
-        .then((buf) => audioCtx().decodeAudioData(buf))
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('tts ' + r.status))))
+        .then(async (j) => {
+          const bin = Uint8Array.from(atob(j.audio), (c) => c.charCodeAt(0));
+          const buffer = await audioCtx().decodeAudioData(bin.buffer);
+          const align = j.chars?.length ? { chars: j.chars, starts: j.starts, ends: j.ends } : null;
+          return { buffer, align };
+        })
         .catch((e) => { console.warn(e); return null; });
     }
     this.spoken += ' ' + text;
@@ -105,15 +137,17 @@ class Speaker {
     if (!item) { this.playing = false; this._maybeDone(); return; }
     this.playing = true;
     setMode('speaking');
-    const buf = item.audio ? await item.audio : null;
+    const got = item.audio ? await item.audio : null;
     if (gen !== this.gen) return;
-    if (buf) {
+    if (got) {
       const node = audioCtx().createBufferSource();
-      node.buffer = buf;
+      node.buffer = got.buffer;
       node.connect(analyser);
       this.node = node;
-      node.onended = () => this._next(gen);
-      node.start();
+      node.onended = () => { this.cur = null; this._next(gen); };
+      const startAt = actx.currentTime + 0.02;
+      this.cur = { startAt, align: got.align };
+      node.start(startAt);
     } else {
       await this._browserSay(item.text, gen);
       this._next(gen);
@@ -128,6 +162,12 @@ class Speaker {
       if (v) u.voice = v;
       u.rate = 1.05;
       u.onstart = () => { if (gen === this.gen) fakeTalk = true; };
+      u.onboundary = (e) => {
+        if (e.name && e.name !== 'word') return;
+        const rest = text.slice(e.charIndex);
+        browserWord.text = rest.slice(0, e.charLength || (rest.match(/^\S+/)?.[0].length ?? 0));
+        browserWord.at = performance.now();
+      };
       u.onend = u.onerror = () => { fakeTalk = false; resolve(); };
       speechSynthesis.speak(u);
     });
@@ -641,4 +681,4 @@ $('#faceReset').onclick = async () => {
 };
 
 // handy for testing: window.ai.ask('...')
-window.ai = { ask, face, speaker };
+window.ai = { ask, face, speaker, actx: () => actx };

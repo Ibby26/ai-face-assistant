@@ -60,6 +60,7 @@ The app is built for speed: the answer streams word by word, each sentence is tu
 
 ## How it works
 
-- `server.js` – keeps your keys private. `/api/ask` streams Claude's answer (with web search), `/api/tts` streams ElevenLabs Flash voice per sentence, `/api/stt` transcribes speech with automatic language detection, `/api/genimage` makes FLUX images on fal.ai.
-- `public/face.js` – the face: shard intro, jaw and lip movement driven by the loudness of the voice, blinking, idle head motion.
+- `server.js` – keeps your keys private. `/api/ask` streams Claude's answer (with web search), `/api/tts` returns ElevenLabs Flash voice per sentence with per-letter timing, `/api/stt` transcribes speech with automatic language detection, `/api/genimage` makes FLUX images on fal.ai.
+- `public/face.js` – the face: shard intro, mouth shapes (jaw open, lips spread or rounded, teeth showing), blinking, idle head motion.
+- `public/visemes.js` – turns each spoken letter into a mouth shape. ElevenLabs reports exactly when every letter is spoken, so the mouth forms “m”, “o”, “ee”, “f” and so on in time with the voice (works for Latin, Cyrillic, Greek, Arabic, Hebrew, Hindi, Japanese kana and Korean; other scripts fall back to natural movement).
 - `public/app.js` – mic, streaming, the voice queue and the picture stream (Wikipedia and Wikimedia Commons photos plus AI images).
