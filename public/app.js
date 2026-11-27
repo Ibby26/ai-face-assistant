@@ -251,41 +251,71 @@ function resetPictures() {
   pics.seen.clear();
 }
 
-function addPic(url, caption, ai = false, front = false) {
+function addPic(url, caption, ai = false, front = false, w = 0) {
   if (!url || pics.seen.has(url)) return;
   pics.seen.add(url);
   const gen = pics.gen;
   const im = new Image();
   im.referrerPolicy = 'no-referrer';
+  im.decoding = 'async';
   im.onload = () => {
     if (gen !== pics.gen) return;
-    const item = { url, caption, ai, img: im };
+    // never show a picture that would be blown up and blurry
+    if (!ai && (im.naturalWidth < 700 || im.naturalHeight < 400)) return;
+    const item = { url, caption, ai, img: im, w: w || im.naturalWidth };
     if (front || ai) pics.pool.unshift(item); else pics.pool.push(item);
     if (!pics.timer) startPictures();
   };
   im.src = url;
 }
 
-async function findPhotos(term, { limit = 8, commons = true } = {}) {
+// Only pictures that are really about the subject: the picture's title must
+// share the important words of the search, and small originals are skipped.
+const STOP = new Set('the and for with from that this what when where which who how why are was were its his her their about into over under after before during between of in on at to by an a or as is be de la le el du des und der die das del'.split(' '));
+const keywords = (s) => [...new Set(s.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').split(/[^\p{L}\p{N}]+/u)
+  .filter((w) => w && (w.length > 2 || /^\d+$/.test(w)) && !STOP.has(w)))];
+function matchScore(term, caption) {
+  const k = keywords(term);
+  if (!k.length) return 0;
+  const cap = keywords(caption);
+  const hit = (w) => cap.some((c) => c === w || (w.length >= 5 && c.length >= 5 && c.slice(0, 5) === w.slice(0, 5)));
+  return k.filter(hit).length / k.length;
+}
+const JUNK = /\b(logo|icon|signature|coat of arms|emblem|seal of|flag of|map of|locator|diagram|chart|graph|stamp|banknote|coin|button|symbol|svg)\b/i;
+const tidy = (t) => t.replace(/^File:/, '').replace(/\.[a-z0-9]+$/i, '').replace(/_/g, ' ');
+
+async function findPhotos(term, { limit = 6 } = {}) {
   if (!term) return;
   const gen = pics.gen;
   const q = encodeURIComponent(term);
-  const wiki = `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrsearch=${q}&gsrlimit=${limit}&prop=pageimages&piprop=thumbnail&pithumbsize=900`;
-  const commonsUrl = `https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrsearch=${q}%20filetype:bitmap&gsrlimit=${limit}&prop=imageinfo&iiprop=url&iiurlwidth=900`;
-  const take = async (url, fn) => {
-    try {
-      const j = await (await fetch(url)).json();
-      if (gen !== pics.gen) return;
-      const pages = Object.values(j.query?.pages || {}).sort((a, b) => (a.index || 0) - (b.index || 0));
-      for (const p of pages) fn(p);
-    } catch (e) { /* offline or blocked: ignore */ }
+  const junkOk = JUNK.test(term);
+  const getJson = async (url) => { try { const j = await (await fetch(url)).json(); return gen === pics.gen ? j : null; } catch { return null; } };
+  const pagesOf = (j) => Object.values(j?.query?.pages || {}).sort((a, b) => (a.index || 0) - (b.index || 0));
+  const wikiPic = (p) => {
+    const o = p.original, t = p.thumbnail;
+    if (!t?.source || /\.svg/i.test(t.source) || !o || o.width < 800 || o.height < 450) return;
+    if (!junkOk && JUNK.test(tidy(decodeURIComponent(o.source.split('/').pop() || '')))) return;
+    addPic(t.source, p.title, false, false, Math.min(o.width, 1600));
   };
+  const img = 'prop=pageimages&piprop=thumbnail|original&pithumbsize=1600';
   await Promise.all([
-    take(wiki, (p) => p.thumbnail?.source && !/\.svg/i.test(p.thumbnail.source) && addPic(p.thumbnail.source, p.title)),
-    commons && take(commonsUrl, (p) => {
-      const u = p.imageinfo?.[0]?.thumburl;
-      if (u && !/\.(svg|tif|pdf)/i.test(p.title)) addPic(u, p.title.replace(/^File:/, '').replace(/\.[a-z]+$/i, '').replace(/_/g, ' '));
-    }),
+    // 1. the exact Wikipedia article (Claude names articles by their title)
+    getJson(`https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&redirects=1&titles=${q}&${img}`)
+      .then((j) => pagesOf(j).forEach(wikiPic)),
+    // 2. the top few articles found by search, if their title fits the subject
+    getJson(`https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrsearch=${q}&gsrlimit=3&${img}`)
+      .then((j) => pagesOf(j).forEach((p) => { if (matchScore(term, p.title) >= 0.6) wikiPic(p); })),
+    // 3. large Commons photos whose title matches most of the search words
+    getJson(`https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrsearch=${q}%20filetype:bitmap&gsrlimit=${limit}&prop=imageinfo&iiprop=url|size&iiurlwidth=1600`)
+      .then((j) => pagesOf(j).forEach((p) => {
+        const ii = p.imageinfo?.[0];
+        const cap = tidy(p.title);
+        if (!ii?.thumburl || /\.(svg|tiff?|pdf|gif)$/i.test(p.title) || ii.width < 1000 || ii.height < 560) return;
+        if (ii.width / ii.height > 2.6 || ii.height / ii.width > 1.6) return; // panoramas, tall scans
+        if (!junkOk && JUNK.test(cap)) return;
+        if (matchScore(term, cap) < 0.6) return;
+        addPic(ii.thumburl, cap, false, false, Math.min(ii.width, 1600));
+      })),
   ]);
 }
 
@@ -315,7 +345,8 @@ function startPictures() {
     // rotate the pool so pictures keep changing
     const item = pics.pool.shift();
     pics.pool.push(item);
-    if (tick % 3 === 1) setBackground(item.url);
+    // the full-screen background only uses pictures big enough to stay sharp
+    if (tick % 3 === 1 && (item.ai || item.w >= 1400)) setBackground(item.url);
     showCard(item);
   }, 520);
 }
@@ -338,7 +369,7 @@ function setBackground(url) {
 function showCard(item) {
   const vw = innerWidth, vh = innerHeight;
   const small = vw < 640;
-  const w = small ? 130 + Math.random() * 40 : 190 + Math.random() * 110;
+  const w = small ? 140 + Math.random() * 40 : 240 + Math.random() * 130;
   const h = w * 0.75;
   const faceHalf = Math.min(vh, vw * 1.3) * 0.26;
   let x, y;
@@ -462,9 +493,8 @@ async function ask(question) {
   subtitle(question, '…');
   status('Thinking…');
 
-  // a few instant pictures for the whole question while Claude starts
-  // (Claude then sends exact search terms and picture ideas for the subject)
-  findPhotos(question, { limit: 3, commons: false });
+  // pictures come only from Claude's exact subject searches and picture ideas
+  // (sent in the first moment of every answer), never from loose guesses
   let gotGen = false;
 
   speaker.lang = micLangUsed || '';
@@ -492,7 +522,7 @@ async function ask(question) {
         subtitle(question, me.text.trim());
         speaker.push(data.t);
       } else if (event === 'images') {
-        data.terms.forEach((t) => findPhotos(t, { limit: 5 }));
+        data.terms.forEach((t) => findPhotos(t));
         // if no picture prompts come, illustrate the first search ideas instead
         setTimeout(() => { if (!gotGen && current === me) data.terms.slice(0, 2).forEach(makeAiImage); }, 1500);
       } else if (event === 'gen') {
@@ -506,7 +536,6 @@ async function ask(question) {
         info.map(data);
       } else if (event === 'search') {
         status('🔎 ' + data.query);
-        findPhotos(data.query);
       } else if (event === 'source') {
         addSource(data);
       } else if (event === 'error') {

@@ -12,7 +12,7 @@ A big, realistic face that you talk to. It assembles itself from glowing AI frag
 |---|---|---|---|
 | `ANTHROPIC_API_KEY` (required) | The brain: answers + live web search | https://console.anthropic.com/settings/keys (add a few dollars of credit under Billing) | about 1–3 cents per question in fast mode, plus $10 per 1,000 web searches |
 | `ELEVENLABS_API_KEY` (recommended) | Realistic streaming voice in 30+ languages, and the "auto-detect any language" microphone | https://elevenlabs.io/app/settings/api-keys (the $5 or $22/month plan) | included in plan |
-| `FAL_KEY` (recommended) | AI-generated images in about a second (FLUX) | https://fal.ai/dashboard/keys (add credit) | about 0.3 cents per image, 2–3 per question |
+| `FAL_KEY` (recommended) | Sharp HD AI-generated images (FLUX1.1 pro, 1440×800, about 3 seconds) | https://fal.ai/dashboard/keys (add credit) | about 5 cents per image, 2–3 per question. Set `FAL_IMAGE_MODEL=fal-ai/flux/schnell` in `.env` for faster, cheaper (less sharp) ones |
 
 Without ElevenLabs the face uses your browser's built-in voice. Without fal.ai you still get real photos.
 

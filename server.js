@@ -97,7 +97,7 @@ Rules:
 - The screen shows pictures about the user's question while you answer. To drive them, the VERY FIRST thing in every reply (before anything else, even before searching) is these two hidden lines:
 [[img: search 1 | search 2 | search 3 | search 4 | search 5]]
 [[gen: prompt 1 | prompt 2 | prompt 3]]
-  img = 4 to 6 English photo search queries for Wikipedia and Wikimedia Commons. Each one must be specific to the user's exact subject and make sense on its own, naming the actual people, places, things, events or dates involved. Never generic words. Example for "how did World War 2 end": Japanese surrender USS Missouri 1945 | V-J Day Times Square 1945 | Soviet flag Reichstag Berlin 1945 | VE Day London crowds 1945 | Hiroshima atomic bomb 1945
+  img = 4 to 6 English searches for real photos on Wikipedia and Wikimedia Commons. Prefer exact English Wikipedia article titles of the specific people, places, objects and events in the answer (they return that article's main photo), plus short, precise Commons searches. Each must be about the user's exact subject. Never generic words, never loosely related topics. Example for "how did World War 2 end": Surrender of Japan | Japanese Instrument of Surrender | USS Missouri (BB-63) | Raising a Flag over the Reichstag | Victory in Europe Day | Atomic bombings of Hiroshima and Nagasaki
   gen = 2 or 3 English prompts for AI-generated pictures that illustrate this specific subject: say exactly what is in the scene (who, what, where, when, era-accurate details) and the mood. Example: "Japanese and Allied officials at the surrender ceremony on the deck of USS Missouri, Tokyo Bay, September 1945, black and white archival photo style"
   If the answer moves on to a clearly different subject, you may add one more [[img: ...]] and [[gen: ...]] line for it. These lines are never read aloud.
 - The screen also has an info panel. Whenever it helps, add these hidden lines too (right after the two lines above, or after searching once you know the facts). Only add the ones that fit the question:
@@ -354,27 +354,37 @@ app.post('/api/stt', express.raw({ type: '*/*', limit: '25mb' }), async (req, re
 });
 
 // ---------------------------------------------------------------- AI images
+// HD pictures: FLUX1.1 [pro] at 1440x800 (sharp, about 3 seconds, ~5 cents),
+// falling back to the cheaper FLUX schnell at the same size if it fails.
+const FAL_MODEL = process.env.FAL_IMAGE_MODEL || 'fal-ai/flux-pro/v1.1';
 app.post('/api/genimage', async (req, res) => {
   if (!FAL_KEY) return res.status(404).json({ error: 'no image key' });
-  const prompt = String(req.body?.prompt || '').slice(0, 500);
-  try {
-    const r = await fetch('https://fal.run/fal-ai/flux/schnell', {
+  const raw = String(req.body?.prompt || '').slice(0, 600);
+  const prompt = /photo|painting|illustration|style/i.test(raw)
+    ? `${raw}, highly detailed, sharp focus, high resolution`
+    : `${raw}, cinematic photograph, sharp focus, highly detailed, 8k`;
+  const size = { width: 1440, height: 800 };
+  const attempt = async (model) => {
+    const body = { prompt, image_size: size, num_images: 1, enable_safety_checker: true, output_format: 'jpeg' };
+    if (model.includes('schnell')) body.num_inference_steps = 4;
+    else body.safety_tolerance = '2';
+    const r = await fetch(`https://fal.run/${model}`, {
       method: 'POST',
       headers: { Authorization: `Key ${FAL_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt: /photo|painting|illustration|style/i.test(prompt) ? `${prompt}, highly detailed` : `${prompt}, cinematic photograph, highly detailed`,
-        image_size: 'landscape_16_9',
-        num_inference_steps: 4,
-        num_images: 1,
-        enable_safety_checker: true,
-      }),
+      body: JSON.stringify(body),
     });
-    const j = await r.json();
-    if (!r.ok || !j.images?.[0]?.url) {
-      console.error('fal error', r.status, JSON.stringify(j).slice(0, 300));
-      return res.status(502).json({ error: 'image failed' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.images?.[0]?.url) throw new Error(`${model} ${r.status} ${JSON.stringify(j).slice(0, 200)}`);
+    return j.images[0].url;
+  };
+  try {
+    let url;
+    try { url = await attempt(FAL_MODEL); } catch (err) {
+      if (FAL_MODEL.includes('schnell')) throw err;
+      console.warn('fal error, trying FLUX schnell:', err.message);
+      url = await attempt('fal-ai/flux/schnell');
     }
-    res.json({ url: j.images[0].url });
+    res.json({ url });
   } catch (err) {
     console.error('genimage error', err?.message);
     res.status(502).json({ error: 'image failed' });
