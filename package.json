@@ -1,0 +1,19 @@
+{
+  "name": "ai-face-assistant",
+  "version": "1.0.0",
+  "description": "Talking-face AI super search assistant",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.14.0",
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0"
+  },
+  "type": "module"
+}

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>AI Face</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- fast-changing pictures behind the face -->
+  <div id="bg"><div class="bg-layer"></div><div class="bg-layer"></div></div>
+  <div id="cards"></div>
+
+  <main id="stage">
+    <canvas id="face" aria-label="AI face"></canvas>
+    <div id="halo"></div>
+  </main>
+
+  <div id="status" class="pill hidden"></div>
+  <div id="sources"></div>
+
+  <div id="subtitle" aria-live="polite"></div>
+
+  <form id="bar" autocomplete="off">
+    <button type="button" id="mic" class="round" title="Talk (or hold Space)">
+      <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
+    </button>
+    <input id="q" type="text" placeholder="Ask me anything…" enterkeyhint="send" />
+    <button type="submit" id="send" class="round" title="Send">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M3 20.5V14l9-2-9-2V3.5L22 12 3 20.5Z"/></svg>
+    </button>
+    <button type="button" id="gear" class="round ghost" title="Settings">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1L11 21h4l.4-2.9c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5L19.4 13ZM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" transform="translate(-1 0)"/></svg>
+    </button>
+  </form>
+
+  <aside id="settings" class="hidden">
+    <h2>Settings</h2>
+    <label>Microphone language
+      <select id="micLang"></select>
+    </label>
+    <label class="row"><input type="checkbox" id="showText" checked /> Show subtitles</label>
+    <label class="row"><input type="checkbox" id="aiImgs" checked /> AI-generated images</label>
+    <div class="row gap">
+      <button type="button" id="faceBtn">Change face…</button>
+      <button type="button" id="faceReset" class="ghost">Use default face</button>
+      <input type="file" id="faceFile" accept="image/*" hidden />
+    </div>
+    <p id="keys" class="muted"></p>
+    <button type="button" id="closeSettings">Done</button>
+  </aside>
+
+  <div id="start">
+    <button id="wake">Tap to wake</button>
+    <p class="muted">Then talk or type. Hold <kbd>Space</kbd> to speak.</p>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
