@@ -47,7 +47,7 @@ Two easy ways:
 1. **In the app:** Settings → **Change face…** and pick any portrait photo. It's remembered in that browser.
 2. **For good:** save your picture as `public/face.jpg` (or `.png`) and refresh.
 
-Best results: a front-facing photo, face roughly centered, mouth closed, good light. The mouth and eyes are found automatically.
+Best results: a front-facing photo, face roughly centered, mouth closed, good light, at least 600 pixels tall. The mouth and eyes are found automatically. To check, turn on Settings → **Show face mesh**: the mesh should sit on the face, with a pink line along the lips.
 
 On the first start, if there is no face yet, the server downloads a free one from thispersondoesnotexist.com (an AI-generated person, so it's nobody real).
 
@@ -61,6 +61,7 @@ The app is built for speed: the answer streams word by word, each sentence is tu
 ## How it works
 
 - `server.js` – keeps your keys private. `/api/ask` streams Claude's answer (with web search), `/api/tts` returns ElevenLabs Flash voice per sentence with per-letter timing, `/api/stt` transcribes speech with automatic language detection, `/api/genimage` makes FLUX images on fal.ai.
-- `public/face.js` – the face: shard intro, mouth shapes (jaw open, lips spread or rounded, teeth showing), blinking, idle head motion.
+- `public/face.js` – the face: shard intro, then the talking photo, blinking and idle head motion.
+- `public/mesh.js` – realistic talking: finds 478 points on the face (MediaPipe, served by this app; the model is downloaded once on first start), wraps the photo on a triangle mesh and moves it like a real jaw, lips and eyelids on the GPU. Where the lips part, a soft mouth interior shows through; if the photo already shows teeth, those are kept.
 - `public/visemes.js` – turns each spoken letter into a mouth shape. ElevenLabs reports exactly when every letter is spoken, so the mouth forms “m”, “o”, “ee”, “f” and so on in time with the voice (works for Latin, Cyrillic, Greek, Arabic, Hebrew, Hindi, Japanese kana and Korean; other scripts fall back to natural movement).
 - `public/app.js` – mic, streaming, the voice queue and the picture stream (Wikipedia and Wikimedia Commons photos plus AI images).

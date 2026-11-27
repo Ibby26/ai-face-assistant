@@ -21,6 +21,9 @@ const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(PUBLIC, { extensions: ['html'] }));
+// Face landmark detection runs in the browser from these local files, so it
+// doesn't depend on a CDN being reachable.
+app.use('/mp', express.static(path.join(__dirname, 'node_modules/@mediapipe/tasks-vision')));
 
 // ---------------------------------------------------------------- config
 app.get('/api/config', (_req, res) => {
@@ -313,7 +316,22 @@ async function ensureFace() {
   }
 }
 
-await ensureFace();
+// The face landmark model (about 3.6 MB) is downloaded once and kept locally.
+const MODEL_FILE = path.join(PUBLIC, 'models', 'face_landmarker.task');
+async function ensureLandmarkModel() {
+  if (fs.existsSync(MODEL_FILE)) return;
+  try {
+    const r = await fetch('https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    fs.mkdirSync(path.dirname(MODEL_FILE), { recursive: true });
+    fs.writeFileSync(MODEL_FILE, Buffer.from(await r.arrayBuffer()));
+    console.log('Downloaded the face landmark model.');
+  } catch (err) {
+    console.warn('Could not download the face landmark model:', err.message);
+  }
+}
+
+await Promise.all([ensureFace(), ensureLandmarkModel()]);
 app.listen(PORT, () => {
   console.log(`\n  AI Face is running:  http://localhost:${PORT}\n`);
   console.log(`  Claude: ${anthropic ? 'ready (' + MODEL + ', ' + SPEED + ')' : 'MISSING ANTHROPIC_API_KEY'}`);

@@ -623,6 +623,11 @@ async function pickFace(file) {
   try { localStorage.setItem(FACE_KEY, url); } catch { status('That image is too big to remember; it will be used until you reload.', 5000); }
   await face.load(url);
   face.playIntro(2600);
+  warnIfNoFace();
+}
+async function warnIfNoFace() {
+  await face.rigPromise;
+  if (!face.found) status('I couldn’t find the face clearly in that picture. A front-facing photo works best.', 6000);
 }
 
 // ================================================================= wiring
@@ -671,6 +676,7 @@ addEventListener('keyup', (e) => {
 
 $('#gear').onclick = () => $('#settings').classList.toggle('hidden');
 $('#closeSettings').onclick = () => $('#settings').classList.add('hidden');
+$('#showMesh').onchange = (e) => { face.debug = e.target.checked; };
 $('#showText').onchange = (e) => $('#subtitle').classList.toggle('off', !e.target.checked);
 $('#faceBtn').onclick = () => $('#faceFile').click();
 $('#faceFile').onchange = (e) => e.target.files[0] && pickFace(e.target.files[0]);

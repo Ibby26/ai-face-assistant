@@ -1,3 +1,4 @@
 node_modules
 .env
 public/face.jpg
+public/models/

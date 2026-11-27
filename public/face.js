@@ -1,11 +1,12 @@
-// The talking face: AI-fragment intro, lip-sync and blinking, all drawn on one canvas.
-// Works with any portrait photo. Mouth and eye positions are found automatically
-// (MediaPipe face landmarks); if that can't load, sensible defaults are used.
+// The talking face: AI-fragment intro, then a realistic talking photo.
+// The photo is wrapped on a face mesh (see mesh.js) that moves like a real
+// jaw, lips and eyelids. Works with any front-facing portrait: the face's
+// landmarks are found automatically by MediaPipe, served from this app.
 
-const MP_VER = '0.10.14';
+import { buildRig, MeshRenderer, landmarksFromMediaPipe, syntheticLandmarks } from './mesh.js';
+
 const DEFAULT_MARKS = {
   mouth: { x: 0.5, y: 0.715, w: 0.17 },
-  noseY: 0.6,
   chinY: 0.86,
   eyes: [
     { x: 0.385, y: 0.47, w: 0.09, h: 0.03 },
@@ -18,107 +19,77 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);
 const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
+let landmarkerPromise = null;
+function getLandmarker() {
+  if (!landmarkerPromise) {
+    landmarkerPromise = (async () => {
+      const vision = await import('/mp/vision_bundle.mjs');
+      const fileset = await vision.FilesetResolver.forVisionTasks('/mp/wasm');
+      const opts = (path) => ({ baseOptions: { modelAssetPath: path }, runningMode: 'IMAGE', numFaces: 1 });
+      try {
+        return await vision.FaceLandmarker.createFromOptions(fileset, opts('/models/face_landmarker.task'));
+      } catch {
+        return await vision.FaceLandmarker.createFromOptions(fileset,
+          opts('https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task'));
+      }
+    })();
+    landmarkerPromise.catch(() => { landmarkerPromise = null; });
+  }
+  return landmarkerPromise;
+}
+
 export class Face {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.work = document.createElement('canvas');
-    this.wctx = this.work.getContext('2d');
-    this.marks = structuredClone(DEFAULT_MARKS);
-    this.level = 0; // smoothed mouth opening 0..1
+    this.level = 0; // smoothed jaw opening 0..1
     this.width = 1; // smoothed lip width (<1 rounded, >1 spread)
-    this.teeth = 0; // smoothed teeth visibility
+    this.teeth = 0.5; // smoothed teeth visibility
     this.getLevel = () => 0; // set from outside (audio loudness)
     this.getShape = () => null; // set from outside: {open, width, teeth} for the current sound
-    this.frame = document.createElement('canvas');
-    this.fctx = this.frame.getContext('2d');
-    this.work2 = document.createElement('canvas');
-    this.w2ctx = this.work2.getContext('2d');
     this.mode = 'idle'; // idle | listening | thinking | speaking
     this.blink = { next: performance.now() + 2500, start: 0 };
     this.live = false;
+    this.debug = false;
+    this.found = false; // true when real landmarks were found
     this._loop = this._loop.bind(this);
   }
 
   async load(src) {
     const img = await loadImage(src);
-    // keep it a sensible size for speed
     const max = 1100;
     const s = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
     const W = Math.round(img.naturalWidth * s), H = Math.round(img.naturalHeight * s);
-    const src2 = document.createElement('canvas');
-    src2.width = W; src2.height = H;
-    src2.getContext('2d').drawImage(img, 0, 0, W, H);
-    this.img = src2;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    c.getContext('2d').drawImage(img, 0, 0, W, H);
+    this.img = c;
     this.W = W; this.H = H;
     this.canvas.width = W; this.canvas.height = H;
-    this.frame.width = W; this.frame.height = H;
-    this.marks = structuredClone(DEFAULT_MARKS);
-    this._buildMasks();
-    this.detectPromise = this._detect(src2, src).catch((e) => console.warn('Face landmarks unavailable, using defaults.', e));
+    this.renderer = null;
+    this.found = false;
+    const token = (this._token = {});
+    // build the rig in the background while the intro plays
+    this.rigPromise = this._buildRig(c, token).catch((e) => console.warn('Face rig failed:', e));
     if (!this._raf) this._raf = requestAnimationFrame(this._loop);
   }
 
-  _buildMasks() {
-    // horizontal feather used for the jaw and eyelid strips
-    const m = document.createElement('canvas');
-    m.width = 256; m.height = 4;
-    const g = m.getContext('2d').createLinearGradient(0, 0, 256, 0);
-    g.addColorStop(0, 'rgba(0,0,0,0)');
-    g.addColorStop(0.24, 'rgba(0,0,0,1)');
-    g.addColorStop(0.76, 'rgba(0,0,0,1)');
-    g.addColorStop(1, 'rgba(0,0,0,0)');
-    const mc = m.getContext('2d');
-    mc.fillStyle = g; mc.fillRect(0, 0, 256, 4);
-    this.hMask = m;
-    // soft oval used when reshaping the lips
-    const o = document.createElement('canvas');
-    o.width = o.height = 256;
-    const oc = o.getContext('2d');
-    const rg = oc.createRadialGradient(128, 128, 0, 128, 128, 128);
-    rg.addColorStop(0, 'rgba(0,0,0,1)');
-    rg.addColorStop(0.72, 'rgba(0,0,0,1)');
-    rg.addColorStop(1, 'rgba(0,0,0,0)');
-    oc.fillStyle = rg; oc.fillRect(0, 0, 256, 256);
-    this.oMask = o;
-  }
-
-  // ------------------------------------------------------------ landmarks
-  async _detect(canvas, key) {
-    const cacheKey = 'marks:' + hashKey(key) + ':' + canvas.width + 'x' + canvas.height;
+  async _buildRig(canvas, token) {
+    const { W, H } = this;
+    let lm = null;
     try {
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) { this.marks = JSON.parse(cached); return; }
-    } catch {}
-    const vision = await import(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/vision_bundle.mjs`);
-    const fileset = await vision.FilesetResolver.forVisionTasks(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/wasm`);
-    const lm = await vision.FaceLandmarker.createFromOptions(fileset, {
-      baseOptions: {
-        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-      },
-      runningMode: 'IMAGE',
-      numFaces: 1,
-    });
-    const res = lm.detect(canvas);
-    lm.close();
-    const p = res.faceLandmarks?.[0];
-    if (!p) throw new Error('no face found');
-    const pt = (i) => p[i];
-    const mid = (a, b) => ({ x: (pt(a).x + pt(b).x) / 2, y: (pt(a).y + pt(b).y) / 2 });
-    const mouthC = mid(13, 14);
-    const eye = (outer, inner, up, low) => ({
-      x: (pt(outer).x + pt(inner).x) / 2,
-      y: (pt(up).y + pt(low).y) / 2,
-      w: Math.abs(pt(outer).x - pt(inner).x),
-      h: Math.max(0.012, Math.abs(pt(up).y - pt(low).y)),
-    });
-    this.marks = {
-      mouth: { x: mouthC.x, y: mouthC.y, w: Math.abs(pt(291).x - pt(61).x) },
-      noseY: pt(2).y,
-      chinY: pt(152).y,
-      eyes: [eye(33, 133, 159, 145), eye(362, 263, 386, 374)],
-    };
-    try { localStorage.setItem(cacheKey, JSON.stringify(this.marks)); } catch {}
+      const det = await getLandmarker();
+      const res = det.detect(canvas);
+      const p = res.faceLandmarks?.[0];
+      if (p) { lm = landmarksFromMediaPipe(p, W, H); this.found = true; }
+      else console.warn('No face found in the picture; using an approximate face layout.');
+    } catch (e) {
+      console.warn('Face landmarks unavailable, using an approximate face layout.', e);
+    }
+    if (!lm) lm = syntheticLandmarks(W, H, DEFAULT_MARKS);
+    if (token !== this._token) return;
+    const rig = buildRig(W, H, lm);
+    this.renderer = new MeshRenderer(W, H, canvas, rig);
   }
 
   // ------------------------------------------------------------ intro
@@ -241,147 +212,59 @@ export class Face {
     }
   }
 
+
   // ------------------------------------------------------------ live face
   _loop(now) {
     this._raf = requestAnimationFrame(this._loop);
     if (!this.img) return;
     if (this.intro) { this._drawIntro(now); return; }
+    const { ctx, W, H } = this;
     if (!this.live) {
-      this.ctx.fillStyle = '#04060a';
-      this.ctx.fillRect(0, 0, this.W, this.H);
+      ctx.fillStyle = '#04060a';
+      ctx.fillRect(0, 0, W, H);
       return;
     }
     // mouth: follow the shape of the current sound (or just loudness),
-    // fast to open, a little softer to close
+    // quick to open, a little softer to close, like real lips
     const shape = this.getShape();
     const tOpen = clamp(shape ? shape.open : this.getLevel());
-    const tWidth = shape ? shape.width : 1 + this.level * 0.04;
+    const tWidth = shape ? shape.width : 1 + this.level * 0.03;
     const tTeeth = shape ? shape.teeth : 0.5;
-    this.level += (tOpen - this.level) * (tOpen > this.level ? 0.6 : 0.38);
-    this.width += (tWidth - this.width) * 0.4;
-    this.teeth += (tTeeth - this.teeth) * 0.4;
+    this.level += (tOpen - this.level) * (tOpen > this.level ? 0.5 : 0.32);
+    this.width += (tWidth - this.width) * 0.32;
+    this.teeth += (tTeeth - this.teeth) * 0.3;
+    const blink = this._blinkAmount(now);
 
-    const { ctx, img, W, H, fctx } = this;
-    fctx.drawImage(img, 0, 0);
-    this._drawLipWidth(this.width);
-    ctx.drawImage(this.frame, 0, 0);
-    this._drawMouth(this.level, this.width, this.teeth);
-    this._drawBlink(now);
+    if (this.renderer) {
+      ctx.drawImage(this.renderer.render({ open: this.level, width: this.width, teeth: this.teeth, blink }), 0, 0);
+      if (this.debug) this.renderer.drawDebug(ctx);
+    } else {
+      ctx.drawImage(this.img, 0, 0);
+    }
     if (this.mode === 'thinking') this._drawScan(now);
 
     // gentle head motion + a little nod while talking
     const t = now / 1000;
-    const tx = Math.sin(t * 0.37) * 4 + Math.sin(t * 1.3) * this.level * 2;
-    const ty = Math.sin(t * 0.29) * 3 - this.level * 4;
-    const rot = Math.sin(t * 0.23) * 0.6 + Math.sin(t * 1.7) * this.level * 0.5;
+    const tx = Math.sin(t * 0.37) * 4 + Math.sin(t * 1.3) * this.level * 1.5;
+    const ty = Math.sin(t * 0.29) * 3 - this.level * 2.5;
+    const rot = Math.sin(t * 0.23) * 0.6 + Math.sin(t * 1.7) * this.level * 0.4;
     const sc = 1 + Math.sin(t * 0.9) * 0.004 + (this.mode === 'listening' ? 0.012 : 0);
     this.canvas.style.transform = `translate(${tx}px, ${ty}px) rotate(${rot}deg) scale(${sc})`;
   }
 
-  // Squeeze the lips together (o, u, w) or spread them (ee, s) by resampling the
-  // area around the mouth: a wider/narrower window of the face is drawn into a
-  // fixed oval, so cheeks move with the lips and no old lip corners show.
-  _drawLipWidth(width) {
-    if (Math.abs(width - 1) < 0.01) return;
-    const { W, H, marks, fctx, work2, w2ctx, img } = this;
-    const mx = marks.mouth.x * W, my = marks.mouth.y * H, mw = marks.mouth.w * W;
-    const bw = mw * 0.9, bh = mw * 0.4; // half sizes of the oval
-    // never reach past the cheeks into the face outline or background
-    const sw = Math.min(bw / width, mw * 1.12);
-    const w = Math.ceil(bw * 2), h = Math.ceil(bh * 2);
-    if (work2.width < w) work2.width = w;
-    if (work2.height < h) work2.height = h;
-    w2ctx.globalCompositeOperation = 'copy';
-    // rounded lips also push forward a touch, so make them slightly taller
-    const sh = bh / (1 + Math.max(0, 1 - width) * 0.25);
-    w2ctx.drawImage(img, mx - sw, my - sh, sw * 2, sh * 2, 0, 0, w, h);
-    w2ctx.globalCompositeOperation = 'destination-in';
-    w2ctx.drawImage(this.oMask, 0, 0, w, h);
-    w2ctx.globalCompositeOperation = 'source-over';
-    fctx.drawImage(work2, 0, 0, w, h, mx - bw, my - bh, w, h);
-  }
-
-  _drawMouth(level, width = 1, teeth = 0.5) {
-    if (level < 0.015) return;
-    const { ctx, W, H, marks } = this;
-    const mx = marks.mouth.x * W, my = marks.mouth.y * H, mw = marks.mouth.w * W;
-    const chin = marks.chinY * H;
-    const open = level * mw * 0.36;
-    const up = open * 0.14;
-
-    // 1) dark inside of the mouth, with a hint of teeth and tongue
-    const rx = mw * (0.4 + level * 0.06) * Math.pow(width, 1.3);
-    const top = my - up, bot = my + open;
-    const cy = (top + bot) / 2, ry = Math.max(1, (bot - top) / 2);
-    ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(mx, cy, rx, ry, 0, 0, Math.PI * 2);
-    ctx.clip();
-    const g = ctx.createRadialGradient(mx, cy, 0, mx, cy, rx);
-    g.addColorStop(0, '#120405');
-    g.addColorStop(0.7, '#2a0a0c');
-    g.addColorStop(1, '#4a1a1c');
-    ctx.fillStyle = g;
-    ctx.fillRect(mx - rx, top, rx * 2, bot - top);
-    const teethH = Math.min((bot - top) * (0.2 + 0.5 * teeth), mw * 0.075) * (0.3 + 0.7 * teeth);
-    const tg = ctx.createLinearGradient(0, top, 0, top + teethH);
-    tg.addColorStop(0, 'rgba(235,228,218,0.92)');
-    tg.addColorStop(1, 'rgba(190,180,170,0.55)');
-    ctx.fillStyle = tg;
-    if (teethH > 0.5) ctx.fillRect(mx - rx * 0.75, top, rx * 1.5, teethH);
-    ctx.fillStyle = 'rgba(150,50,60,0.55)';
-    ctx.beginPath();
-    ctx.ellipse(mx, bot, rx * 0.6, (bot - top) * 0.35, 0, Math.PI, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-
-    // 2) upper lip lifts a little
-    const sw = mw * 2.4 * Math.max(1, width), sx = mx - sw / 2;
-    const uTop = my - (my - marks.noseY * H) * 0.7;
-    this._strip(sx, uTop, sw, my - uTop, uTop, my - up - uTop);
-
-    // 3) lower lip + jaw stretch downward (neck stays put, so no seam)
-    const bottom = Math.min(H, chin + (chin - my) * 0.45);
-    this._strip(sx, my, sw, bottom - my, my + open, bottom - my - open);
-  }
-
-  // draw an image strip stretched vertically, feathered at the left/right edges
-  _strip(sx, sy, sw, sh, dy, dh) {
-    if (sh < 1 || dh < 1) return;
-    const { work, wctx, ctx } = this;
-    const img = this.frame;
-    const w = Math.ceil(sw), h = Math.ceil(dh);
-    if (work.width < w) work.width = w;
-    if (work.height < h) work.height = h;
-    wctx.globalCompositeOperation = 'copy';
-    wctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
-    wctx.globalCompositeOperation = 'destination-in';
-    wctx.drawImage(this.hMask, 0, 0, w, h);
-    wctx.globalCompositeOperation = 'source-over';
-    ctx.drawImage(work, 0, 0, w, h, sx, dy, w, h);
-  }
-
-  _drawBlink(now) {
+  _blinkAmount(now) {
     const b = this.blink;
     if (!b.start && now > b.next) b.start = now;
-    if (!b.start) return;
-    const t = (now - b.start) / 170;
+    if (!b.start) return 0;
+    const t = (now - b.start) / 190;
     if (t >= 1) {
       b.start = 0;
       b.next = now + 2200 + Math.random() * 4200;
-      if (Math.random() < 0.15) b.next = now + 220; // double blink sometimes
-      return;
+      if (Math.random() < 0.15) b.next = now + 240; // double blink sometimes
+      return 0;
     }
-    const amt = Math.sin(t * Math.PI); // close then open
-    const { W, H } = this;
-    for (const e of this.marks.eyes) {
-      const ex = e.x * W, ey = e.y * H, ew = e.w * W, eh = Math.max(e.h * H, ew * 0.18);
-      const sw = ew * 1.7, sx = ex - sw / 2;
-      const lidTop = ey - eh * 2.4;
-      const lidBot = ey - eh * 0.55;
-      const shut = eh * 1.25 * amt;
-      this._strip(sx, lidTop, sw, lidBot - lidTop, lidTop, lidBot - lidTop + shut);
-    }
+    // close fast, open a little slower
+    return t < 0.4 ? Math.sin((t / 0.4) * Math.PI / 2) : Math.cos(((t - 0.4) / 0.6) * Math.PI / 2);
   }
 
   _drawScan(now) {
@@ -406,12 +289,4 @@ function loadImage(src) {
     img.onerror = () => reject(new Error('could not load face image ' + String(src).slice(0, 60)));
     img.src = src;
   });
-}
-
-function hashKey(s) {
-  let h = 2166136261;
-  const str = String(s);
-  const step = Math.max(1, Math.floor(str.length / 4000));
-  for (let i = 0; i < str.length; i += step) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
-  return (h >>> 0).toString(36) + str.length;
 }
