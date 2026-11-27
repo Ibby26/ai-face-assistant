@@ -33,11 +33,27 @@ npm start
 
 Open **http://localhost:3000**, click **Tap to wake**, and allow the microphone when asked.
 
+## Use it on your phone (free, runs from your computer)
+
+1. Install Cloudflare's free tunnel tool once:
+   - Windows: open PowerShell and run `winget install --id Cloudflare.cloudflared`
+   - Mac: `brew install cloudflared`
+2. In `.env`, set a password: `APP_PASSWORD=pick-a-long-password`
+3. Run `npm run online` instead of `npm start`.
+4. It prints a private `https://….trycloudflare.com` link and a QR code. Scan it with your phone, type your password once, and that phone stays signed in.
+   On iPhone, tap Share → **Add to Home Screen** to open it like an app.
+
+Your computer has to stay on and awake while you use it, and the link changes each time you run `npm run online`. Without `APP_PASSWORD` the app refuses every visitor except your own computer, so it can never be open to the internet by accident. Five wrong passwords in a row slow down further tries.
+
 ## Using it
 
 - **Talk:** click the mic (or hold **Space**), speak, and stop talking. It answers automatically.
 - **Type:** type in the box and press Enter.
 - **Interrupt:** start talking or asking again at any time; **Esc** stops it.
+- **Hands-free:** just say **“Hey Nova, …”** with your question, any time (Chrome and Edge). Say only “Hey Nova” and it opens the mic for you. The 👂 in the bar shows it's listening. Change the name in Settings.
+- **Interrupt by talking:** while it speaks, say its name, or just start talking, and it stops and listens. It ignores its own voice; if it ever cuts itself off on speakers, turn off Settings → **Interrupt it by just talking** or use headphones.
+- **Facts, timeline and map:** for questions about history, people, places or anything with dates, a panel shows key facts, a timeline and a map while it talks (swipe it on a phone).
+- **Memory:** it remembers your past questions and keeps short notes about you (your name, interests, how you like answers) in `data/memory.json` on your computer. See or erase them in Settings (**What it remembers about you**, **Forget everything**), or turn off **Remember our conversations**.
 - **Language:** just speak or type in any language; it answers in the same one. In Settings (gear icon) you can pin the microphone to one language, which is a little faster than auto-detect.
 
 ## Change the face
@@ -68,6 +84,7 @@ The app is built for speed: the answer streams word by word, each sentence is tu
 
 ## How it works
 
+- `lib/lock.js` – the password lock. `lib/memory.js` – long-term memory. `scripts/online.js` – `npm run online` (Cloudflare tunnel + QR code).
 - `server.js` – keeps your keys private. `/api/ask` streams Claude's answer (with web search), `/api/tts` returns ElevenLabs Flash voice per sentence with per-letter timing, `/api/stt` transcribes speech with automatic language detection, `/api/genimage` makes FLUX images on fal.ai.
 - `public/face.js` – the face: shard intro, then the talking photo, blinking and idle head motion.
 - `public/mesh.js` – realistic talking: finds 478 points on the face (MediaPipe, served by this app; the model is downloaded once on first start), wraps the photo on a triangle mesh and moves it like a real jaw, lips and eyelids on the GPU. Where the lips part, a soft mouth interior shows through; if the photo already shows teeth, those are kept.

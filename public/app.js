@@ -346,7 +346,7 @@ function showCard(item) {
     x = Math.random() * (vw - w);
     y = Math.random() < 0.5 ? 60 + Math.random() * 60 : vh * 0.62 + Math.random() * (vh * 0.12);
   } else {
-    const left = Math.random() < 0.5;
+    const left = document.body.classList.contains('has-info') || Math.random() < 0.5;
     const minX = left ? 12 : vw / 2 + faceHalf;
     const maxX = left ? vw / 2 - faceHalf - w : vw - w - 12;
     x = maxX > minX ? minX + Math.random() * (maxX - minX) : (left ? 12 : vw - w - 12);
@@ -368,6 +368,55 @@ function showCard(item) {
   const all = $('#cards').children;
   if (all.length > 9) all[0].remove();
 }
+
+// ================================================================= info panel
+// Key facts, a timeline and a map for the current answer, beside the face.
+const info = {
+  reset() {
+    $('#info').classList.add('hidden');
+    document.body.classList.remove('has-info');
+    $('#facts').innerHTML = ''; $('#timeline').innerHTML = '';
+    $('#factsBox').hidden = $('#timeBox').hidden = $('#mapBox').hidden = true;
+    $('#map').removeAttribute('src');
+  },
+  show() {
+    if (!$('#showInfo').checked) return;
+    $('#info').classList.remove('hidden');
+    document.body.classList.add('has-info');
+  },
+  facts(items) {
+    if (!items?.length) return;
+    const dl = $('#facts');
+    items.forEach((f, i) => {
+      const dt = document.createElement('dt'), dd = document.createElement('dd');
+      dt.textContent = f.label; dd.textContent = f.value;
+      dt.style.animationDelay = dd.style.animationDelay = i * 0.12 + 's';
+      dl.append(dt, dd);
+    });
+    $('#factsBox').hidden = false; this.show();
+  },
+  timeline(items) {
+    if (!items?.length) return;
+    const ol = $('#timeline');
+    ol.innerHTML = '';
+    items.forEach((e, i) => {
+      const li = document.createElement('li'), b = document.createElement('b');
+      b.textContent = e.when;
+      li.append(b, document.createTextNode(e.what));
+      li.style.animationDelay = i * 0.15 + 's';
+      ol.appendChild(li);
+    });
+    $('#timeBox').hidden = false; this.show();
+  },
+  map({ name, lat, lon, zoom }) {
+    // OpenStreetMap: free, no key needed
+    const dLon = 360 / 2 ** zoom * 1.6, dLat = dLon * 0.6 * Math.cos(lat * Math.PI / 180);
+    const box = [lon - dLon / 2, lat - dLat / 2, lon + dLon / 2, lat + dLat / 2].map((v) => v.toFixed(5)).join(',');
+    $('#map').src = `https://www.openstreetmap.org/export/embed.html?bbox=${box}&layer=mapnik&marker=${lat},${lon}`;
+    $('#mapName').textContent = name || 'Map';
+    $('#mapBox').hidden = false; this.show();
+  },
+};
 
 // ================================================================= asking
 function setMode(m) {
@@ -403,6 +452,7 @@ async function ask(question) {
   resetPictures();
   aiCount = 0;
   $('#sources').innerHTML = '';
+  info.reset();
   picsActiveUntil = performance.now() + 60000;
   audioCtx();
 
@@ -430,9 +480,10 @@ async function ask(question) {
     const r = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, history }),
+      body: JSON.stringify({ question, history, remember: $('#remember').checked, name: assistantName() }),
       signal: me.abort.signal,
     });
+    if (r.status === 401) { location.href = '/login'; return; }
     await readSSE(r, (event, data) => {
       if (current !== me) return;
       if (event === 'text') {
@@ -447,6 +498,12 @@ async function ask(question) {
       } else if (event === 'gen') {
         gotGen = true;
         data.prompts.forEach(makeAiImage);
+      } else if (event === 'facts') {
+        info.facts(data.items);
+      } else if (event === 'timeline') {
+        info.timeline(data.items);
+      } else if (event === 'map') {
+        info.map(data);
       } else if (event === 'search') {
         status('🔎 ' + data.query);
         findPhotos(data.query);
@@ -533,6 +590,7 @@ function startMic() {
   current?.abort.abort(); current = null;
   speaker.reset();
   audioCtx();
+  wake.pause();
   $('#mic').classList.add('on');
   setMode('listening');
   const lang = micLang();
@@ -624,6 +682,120 @@ function stopMic() {
 function endMic() {
   $('#mic').classList.remove('on');
   if (face.mode === 'listening') setMode('idle');
+  wake.resume();
+}
+
+// ================================================================= hands-free
+// Listens all the time for its name ("Hey Nova, what's ...?"). Saying the
+// name always stops it talking. With "Interrupt it by just talking" on, it
+// also stops when it hears you say something that isn't its own voice.
+const assistantName = () => ($('#wakeName').value.trim() || config.name || 'Nova');
+const norm = (s) => s.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+
+function nameVariants(name) {
+  const n = norm(name);
+  const v = new Set([n, n.replace(/\s/g, '')]);
+  // speech recognition often mishears short names; a few common ones
+  if (n === 'nova') ['noah', 'novah', 'nover', 'no va', 'nava', 'norva', 'nola'].forEach((x) => v.add(x));
+  return [...v].map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+}
+
+const wake = {
+  rec: null,
+  paused: false,
+  want: false,
+  hot: null, // what was heard after the name so far
+  restarts: 0,
+  regex: null,
+  enabled() { return !!SR && $('#wakeOn').checked; },
+  start() {
+    this.want = true;
+    this.regex = new RegExp(`(?:^|\\b(?:hey|hi|hello|ok|okay|ya|hej|hallo|hola|ciao|salut|oi)\\s+)(?:${nameVariants(assistantName()).join('|')})\\b\\s*(.*)$`, 'i');
+    this._go();
+  },
+  stop() { this.want = false; this.rec?.abort(); this.rec = null; this._ear(); },
+  pause() { this.paused = true; this.rec?.abort(); this.rec = null; this._ear(); },
+  resume() { this.paused = false; setTimeout(() => this._go(), 350); },
+  _ear() {
+    $('#ear').hidden = !(this.want && this.enabled());
+    $('#ear').classList.toggle('hot', !!this.hot);
+  },
+  _go() {
+    if (!this.want || this.paused || this.rec || !this.enabled() || micOn()) return this._ear();
+    const r = new SR();
+    r.continuous = true;
+    r.interimResults = true;
+    const l = micLang();
+    r.lang = l === 'auto' ? navigator.language : l;
+    r.onresult = (e) => this._heard(e);
+    r.onerror = (e) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        this.want = false;
+        status('Hands-free needs microphone permission.', 4000);
+      }
+    };
+    r.onend = () => {
+      if (this.rec === r) this.rec = null;
+      // Chrome stops listening now and then; start again (slower if it keeps failing)
+      this.restarts++;
+      setTimeout(() => { this.restarts = Math.max(0, this.restarts - 1); this._go(); }, Math.min(5000, 250 * this.restarts));
+    };
+    this.rec = r;
+    try { r.start(); } catch { this.rec = null; }
+    this._ear();
+  },
+  _heard(e) {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const res = e.results[i];
+      const text = res[0].transcript.trim();
+      const isFinal = res.isFinal;
+      const m = norm(text).match(this.regex);
+      if (m || this.hot !== null) {
+        if (this.hot === null) this._interrupt('Listening…');
+        // keep what came after the name, in the original wording
+        const after = m ? afterName(text, m[1]) : text;
+        this.hot = after;
+        if (after) subtitle('', after);
+        if (isFinal) {
+          this.hot = null; this._ear();
+          if (after.replace(/[\s.,!?]/g, '').length > 1) ask(after);
+          else { // just the name: open the mic for the question
+            this.pause();
+            startMic();
+          }
+        }
+        this._ear();
+      } else if ($('#bargeIn').checked && (speaker.playing || current) && isYou(text, isFinal)) {
+        this._interrupt('');
+        if (isFinal) ask(text); else { this.hot = text; subtitle('', text); }
+      }
+    }
+  },
+  _interrupt(msg) {
+    current?.abort.abort(); current = null;
+    speaker.reset();
+    setMode('listening');
+    status(msg, 3000);
+  },
+};
+
+// the words after the name, keeping the original spelling and accents
+function afterName(text, normAfter) {
+  if (!normAfter) return '';
+  const words = text.split(/\s+/);
+  const n = normAfter.split(' ').length;
+  let count = 0, k = words.length;
+  while (k > 0 && count < n) { k--; count += norm(words[k]).split(' ').filter(Boolean).length; }
+  return words.slice(k).join(' ');
+}
+
+// is this speech the user, or the assistant's own voice echoing back?
+function isYou(text, isFinal) {
+  const heard = norm(text).split(' ').filter((w) => w.length > 1);
+  if (heard.length < (isFinal ? 2 : 3)) return false;
+  const said = new Set(norm(speaker.spoken.slice(-600) + ' ' + (current?.text || '').slice(-600)).split(' '));
+  const echo = heard.filter((w) => said.has(w)).length / heard.length;
+  return echo < 0.4;
 }
 
 // ================================================================= face swap
@@ -688,7 +860,8 @@ $('#wake').onclick = async () => {
   await ready;
   await face.playIntro();
   if (!config.claude) status('Add your ANTHROPIC_API_KEY to the .env file, then restart the server.', 10000);
-  $('#q').focus();
+  if (wake.enabled()) wake.start();
+  if (!('ontouchstart' in window)) $('#q').focus();
 };
 
 $('#bar').onsubmit = (e) => {
@@ -728,5 +901,46 @@ $('#faceReset').onclick = async () => {
   face.playIntro(2600);
 };
 
+// hands-free + memory settings (remembered in this browser)
+const saved = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } };
+const store = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+for (const id of ['wakeOn', 'bargeIn', 'showInfo', 'remember']) {
+  $('#' + id).checked = saved(id, '1') === '1';
+  $('#' + id).addEventListener('change', (e) => store(id, e.target.checked ? '1' : '0'));
+}
+if (!SR) { $('#wakeOn').checked = false; $('#wakeOn').disabled = true; $('#wakeHint').textContent = 'Hands-free needs Chrome or Edge.'; }
+$('#wakeName').value = saved('wakeName', '');
+const nameHint = () => {
+  $('#wakeHint').textContent = SR ? `Say “Hey ${assistantName()}, …” any time. Works in Chrome and Edge.` : 'Hands-free needs Chrome or Edge.';
+  $('#q').placeholder = wake.enabled() ? `Ask me anything… or say “Hey ${assistantName()}”` : 'Ask me anything…';
+};
+$('#wakeName').onchange = () => { store('wakeName', $('#wakeName').value.trim()); nameHint(); if (wake.want) { wake.stop(); wake.start(); } };
+$('#wakeOn').addEventListener('change', (e) => { nameHint(); if (e.target.checked) wake.start(); else wake.stop(); });
+$('#showInfo').addEventListener('change', (e) => { if (!e.target.checked) { $('#info').classList.add('hidden'); document.body.classList.remove('has-info'); } });
+$('#infoClose').onclick = () => { $('#info').classList.add('hidden'); document.body.classList.remove('has-info'); };
+ready.then(nameHint);
+
+async function loadMemory() {
+  try {
+    const r = await fetch('/api/memory');
+    if (r.status === 401) return (location.href = '/login');
+    const m = await r.json();
+    $('#memText').textContent = m.profile || (m.count ? `Nothing noted yet (${m.count} questions saved).` : 'Nothing yet.');
+  } catch {}
+}
+$('#gear').addEventListener('click', () => { if (!$('#settings').classList.contains('hidden')) loadMemory(); });
+$('#forget').onclick = async () => {
+  if ($('#forget').dataset.sure !== '1') {
+    $('#forget').dataset.sure = '1'; $('#forget').textContent = 'Tap again to forget everything';
+    setTimeout(() => { $('#forget').dataset.sure = ''; $('#forget').textContent = 'Forget everything'; }, 4000);
+    return;
+  }
+  await fetch('/api/memory', { method: 'DELETE' });
+  history.length = 0;
+  $('#forget').dataset.sure = ''; $('#forget').textContent = 'Forgotten ✓';
+  loadMemory();
+};
+if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') $('#logout').hidden = false;
+
 // handy for testing: window.ai.ask('...')
-window.ai = { ask, face, speaker, actx: () => actx };
+window.ai = { ask, face, speaker, wake, info, actx: () => actx };

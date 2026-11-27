@@ -7,6 +7,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
+import { setupLock } from './lib/lock.js';
+import { createMemory } from './lib/memory.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
@@ -18,8 +20,17 @@ const ELEVEN_VOICE = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
 const FAL_KEY = process.env.FAL_KEY || '';
 
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
+const ASSISTANT_NAME = process.env.ASSISTANT_NAME || 'Nova';
+const memory = createMemory({
+  dir: process.env.DATA_DIR || path.join(__dirname, 'data'),
+  anthropic,
+  model: MODEL,
+});
 const app = express();
+app.set('trust proxy', true);
 app.use(express.json({ limit: '1mb' }));
+// Password lock (set APP_PASSWORD in .env). Everything below it is protected.
+setupLock(app, process.env.APP_PASSWORD || '');
 app.use(express.static(PUBLIC, { extensions: ['html'] }));
 // Face landmark detection runs in the browser from these local files, so it
 // doesn't depend on a CDN being reachable.
@@ -32,8 +43,13 @@ app.get('/api/config', (_req, res) => {
     voice: !!ELEVEN_KEY,
     aiImages: !!FAL_KEY,
     face: findFace(),
+    name: ASSISTANT_NAME,
   });
 });
+
+// ---------------------------------------------------------------- memory
+app.get('/api/memory', (_req, res) => res.json(memory.summary()));
+app.delete('/api/memory', (_req, res) => { memory.clear(); res.json({ ok: true }); });
 
 function findFace() {
   for (const f of ['face.png', 'face.jpg', 'face.jpeg', 'face.webp']) {
@@ -71,7 +87,7 @@ app.get('/api/faces', (_req, res) => {
 });
 
 // ---------------------------------------------------------------- ask (SSE)
-const systemPrompt = () => `You are a friendly, brilliant AI search assistant with a human face. The user sees your face and hears you speak, so everything you write is read aloud.
+const systemPrompt = (name, remember) => `You are ${name}, a friendly, brilliant AI search assistant with a human face. The user sees your face and hears you speak, so everything you write is read aloud.
 
 Rules:
 - Reply in the same language the user used.
@@ -84,8 +100,16 @@ Rules:
   img = 4 to 6 English photo search queries for Wikipedia and Wikimedia Commons. Each one must be specific to the user's exact subject and make sense on its own, naming the actual people, places, things, events or dates involved. Never generic words. Example for "how did World War 2 end": Japanese surrender USS Missouri 1945 | V-J Day Times Square 1945 | Soviet flag Reichstag Berlin 1945 | VE Day London crowds 1945 | Hiroshima atomic bomb 1945
   gen = 2 or 3 English prompts for AI-generated pictures that illustrate this specific subject: say exactly what is in the scene (who, what, where, when, era-accurate details) and the mood. Example: "Japanese and Allied officials at the surrender ceremony on the deck of USS Missouri, Tokyo Bay, September 1945, black and white archival photo style"
   If the answer moves on to a clearly different subject, you may add one more [[img: ...]] and [[gen: ...]] line for it. These lines are never read aloud.
+- The screen also has an info panel. Whenever it helps, add these hidden lines too (right after the two lines above, or after searching once you know the facts). Only add the ones that fit the question:
+[[facts: Label: value | Label: value]]
+  up to 5 key facts in the user's language: label 1 to 3 words, value under 8 words (dates, numbers, names, places). Must be correct.
+[[timeline: 1939: Germany invades Poland | 1941: Pearl Harbor attack | 1945: Japan surrenders]]
+  3 to 7 dated events in order, in the user's language, for history, biographies, wars, companies, anything with a sequence.
+[[map: place name | latitude | longitude | zoom]]
+  when the question is about a place, country, city, battle, event location or route. Decimal degrees; zoom 3 (continent) to 15 (street). Example: [[map: Tokyo Bay, Japan | 35.45 | 139.75 | 10]]
+  These lines are never read aloud either.
 
-Today's date is ${new Date().toDateString()}.`;
+Today's date is ${new Date().toDateString()}.${remember ? memory.promptText() : ''}`;
 
 app.post('/api/ask', async (req, res) => {
   res.writeHead(200, {
@@ -106,6 +130,9 @@ app.post('/api/ask', async (req, res) => {
 
   const history = Array.isArray(req.body?.history) ? req.body.history.slice(-12) : [];
   const question = String(req.body?.question || '').slice(0, 4000);
+  const remember = req.body?.remember !== false;
+  const name = String(req.body?.name || ASSISTANT_NAME).slice(0, 40);
+  let answer = '';
   const messages = [
     ...history
       .filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content)
@@ -116,8 +143,8 @@ app.post('/api/ask', async (req, res) => {
   while (messages.length && messages[0].role !== 'user') messages.shift();
 
   const tagParser = makeTagParser(
-    (t) => send('text', { t }),
-    (items, kind) => send(kind === 'gen' ? 'gen' : 'images', kind === 'gen' ? { prompts: items } : { terms: items }),
+    (t) => { answer += t; send('text', { t }); },
+    (items, kind) => sendTag(send, items, kind),
   );
   let speed = SPEED;
   let gotOutput = false;
@@ -143,6 +170,7 @@ app.post('/api/ask', async (req, res) => {
             }
           },
           isClosed: () => closed,
+          system: systemPrompt(name, remember),
         });
       } catch (err) {
         // Fast mode not available on this account / rate limited: retry at standard speed.
@@ -166,6 +194,7 @@ app.post('/api/ask', async (req, res) => {
     }
     tagParser.flush();
     send('done', {});
+    if (remember && !closed && answer.trim()) memory.record(question, answer.trim());
   } catch (err) {
     console.error('ask error:', err?.status, err?.message);
     send('error', { message: friendlyError(err) });
@@ -173,11 +202,11 @@ app.post('/api/ask', async (req, res) => {
   res.end();
 });
 
-async function runStream(messages, speed, { onText, onBlock, isClosed }) {
+async function runStream(messages, speed, { onText, onBlock, isClosed, system }) {
   const params = {
     model: MODEL,
     max_tokens: 4000,
-    system: systemPrompt(),
+    system,
     messages,
     tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 }],
     output_config: { effort: 'low' },
@@ -217,14 +246,35 @@ function makeTagParser(onText, onTerms) {
       }
       const inner = buf.slice(2, end);
       buf = buf.slice(end + 2).replace(/^\s*\n?/, '');
-      const m = inner.match(/^\s*(img|gen)\s*:(.*)$/is);
+      const m = inner.match(/^\s*(img|gen|facts?|timeline|map)\s*:(.*)$/is);
       if (m) {
-        const items = m[2].split('|').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean).slice(0, 6);
+        const items = m[2].split('|').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean).slice(0, 8);
         if (items.length) onTerms(items, m[1].toLowerCase());
       }
     }
   };
   return { push: (t) => { buf += t; drain(false); }, flush: () => drain(true) };
+}
+
+// Turns one hidden tag into an event for the browser.
+function sendTag(send, items, kind) {
+  const split = (s) => {
+    const i = s.search(/:\s/) >= 0 ? s.search(/:\s/) : s.indexOf(':');
+    return i > 0 ? [s.slice(0, i).trim(), s.slice(i + 1).trim()] : ['', s];
+  };
+  if (kind === 'img') send('images', { terms: items.slice(0, 6) });
+  else if (kind === 'gen') send('gen', { prompts: items.slice(0, 4) });
+  else if (kind === 'fact' || kind === 'facts') {
+    send('facts', { items: items.slice(0, 6).map((s) => { const [label, value] = split(s); return { label, value }; }).filter((f) => f.value) });
+  } else if (kind === 'timeline') {
+    send('timeline', { items: items.map((s) => { const [when, what] = split(s); return { when, what }; }).filter((e) => e.when && e.what) });
+  } else if (kind === 'map') {
+    const [name, lat, lon, zoom] = items;
+    const la = parseFloat(lat), lo = parseFloat(lon), z = parseFloat(zoom);
+    if (Number.isFinite(la) && Number.isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180) {
+      send('map', { name, lat: la, lon: lo, zoom: Number.isFinite(z) ? Math.max(2, Math.min(17, z)) : 9 });
+    }
+  }
 }
 
 function friendlyError(err) {
@@ -366,5 +416,6 @@ app.listen(PORT, () => {
   console.log(`\n  AI Face is running:  http://localhost:${PORT}\n`);
   console.log(`  Claude: ${anthropic ? 'ready (' + MODEL + ', ' + SPEED + ')' : 'MISSING ANTHROPIC_API_KEY'}`);
   console.log(`  Voice:  ${ELEVEN_KEY ? 'ElevenLabs' : 'browser voice (add ELEVENLABS_API_KEY for a realistic voice)'}`);
-  console.log(`  AI images: ${FAL_KEY ? 'fal.ai FLUX' : 'off (add FAL_KEY)'}\n`);
+  console.log(`  AI images: ${FAL_KEY ? 'fal.ai FLUX' : 'off (add FAL_KEY)'}`);
+  console.log(`  Password: ${process.env.APP_PASSWORD ? 'on' : 'off (only this computer can use it; set APP_PASSWORD to use it from your phone)'}\n`);
 });

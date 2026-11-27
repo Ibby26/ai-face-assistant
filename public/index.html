@@ -4,6 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>AI Face</title>
+  <meta name="theme-color" content="#04060a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="/manifest.json" crossorigin="use-credentials" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -19,6 +24,14 @@
   <div id="status" class="pill hidden"></div>
   <div id="sources"></div>
 
+  <!-- key facts, timeline and map for the current answer -->
+  <aside id="info" class="hidden" aria-live="polite">
+    <button type="button" id="infoClose" class="x" title="Hide">×</button>
+    <section id="factsBox" hidden><h3>Key facts</h3><dl id="facts"></dl></section>
+    <section id="timeBox" hidden><h3>Timeline</h3><ol id="timeline"></ol></section>
+    <section id="mapBox" hidden><h3 id="mapName">Map</h3><div class="map"><iframe id="map" title="Map" loading="lazy" referrerpolicy="no-referrer"></iframe></div></section>
+  </aside>
+
   <div id="subtitle" aria-live="polite"></div>
 
   <form id="bar" autocomplete="off">
@@ -26,6 +39,7 @@
       <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
     </button>
     <input id="q" type="text" placeholder="Ask me anything…" enterkeyhint="send" />
+    <span id="ear" title="Listening for its name" hidden>👂</span>
     <button type="submit" id="send" class="round" title="Send">
       <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M3 20.5V14l9-2-9-2V3.5L22 12 3 20.5Z"/></svg>
     </button>
@@ -39,6 +53,12 @@
     <label>Microphone language
       <select id="micLang"></select>
     </label>
+    <label class="row"><input type="checkbox" id="wakeOn" checked /> Hands-free: listen for its name</label>
+    <label>Its name <input type="text" id="wakeName" value="Nova" maxlength="20" />
+      <span class="muted" id="wakeHint">Say “Hey Nova, …” any time. Works in Chrome and Edge.</span>
+    </label>
+    <label class="row"><input type="checkbox" id="bargeIn" checked /> Interrupt it by just talking</label>
+    <label class="row"><input type="checkbox" id="showInfo" checked /> Show facts, timeline and map</label>
     <label class="row"><input type="checkbox" id="showText" checked /> Show subtitles</label>
     <label class="row"><input type="checkbox" id="aiImgs" checked /> AI-generated images</label>
     <label class="row"><input type="checkbox" id="morph" checked /> Morph between different people's features</label>
@@ -51,6 +71,12 @@
       <button type="button" id="faceBtn">Change face…</button>
       <button type="button" id="faceReset" class="ghost">Use default face</button>
       <input type="file" id="faceFile" accept="image/*" hidden />
+    </div>
+    <label class="row"><input type="checkbox" id="remember" checked /> Remember our conversations</label>
+    <details id="memBox"><summary class="muted">What it remembers about you</summary><p id="memText" class="muted"></p></details>
+    <div class="row gap">
+      <button type="button" id="forget" class="ghost">Forget everything</button>
+      <a id="logout" href="/logout" class="muted" hidden>Sign out</a>
     </div>
     <p id="keys" class="muted"></p>
     <button type="button" id="closeSettings">Done</button>
