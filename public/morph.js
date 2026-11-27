@@ -88,14 +88,36 @@ export class Morph {
 
   // add another person; returns false if their face couldn't be used
   addDonor(canvas, lm) {
+    const d = this._prepare(canvas, lm);
+    if (!d) return false;
+    this.renderer.addFace(canvas, d.uv, 0.35);
+    this.shapes.push(d.shape);
+    this.weights.push(new Float32Array(this.n));
+    return true;
+  }
+
+  // swap a face that isn't showing right now for a new person
+  replaceDonor(canvas, lm) {
+    const busy = new Set(this.state.flatMap((s) => [s.from, s.to]));
+    const free = [];
+    for (let k = 1; k < this.shapes.length; k++) if (!busy.has(k)) free.push(k);
+    if (!free.length) return false;
+    const k = free[Math.floor(Math.random() * free.length)];
+    const d = this._prepare(canvas, lm);
+    if (!d) return false;
+    this.renderer.replaceFace(k, canvas, d.uv);
+    this.shapes[k] = d.shape;
+    return true;
+  }
+
+  _prepare(canvas, lm) {
     const { rig, baseLm } = this;
     // skip faces turned too far to the side; they don't line up well
     const [d0, d1] = eyeCenters(lm);
     const iod = Math.hypot(d1.x - d0.x, d1.y - d0.y);
     const nose = lm.points[1];
     const yaw = Math.abs((nose.x - (d0.x + d1.x) / 2) / iod);
-    if (yaw > 0.42) { console.info('Morph: skipping a face that is turned to the side', yaw.toFixed(2)); return false; }
-    console.info('Morph: using face, yaw', yaw.toFixed(2));
+    if (yaw > 0.42) return null; // turned too far to the side
     const T = eyeAlign(baseLm, lm);
     const own = placeOn(rig, lm); // donor picture coords (NaN for background points)
     const W = canvas.width, H = canvas.height;
@@ -116,11 +138,7 @@ export class Morph {
       }
       uv[v * 2] = px / W; uv[v * 2 + 1] = py / H;
     }
-    // skin tone and lighting come from the main photo (see mesh.js shader)
-    this.renderer.addFace(canvas, uv, 0.35);
-    this.shapes.push(shape);
-    this.weights.push(new Float32Array(this.n));
-    return true;
+    return { uv, shape };
   }
 
   // works out this frame's face: shape (rest positions) and per-face layers

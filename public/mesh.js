@@ -348,6 +348,14 @@ export class MeshRenderer {
     return this.faces.length - 1;
   }
 
+  replaceFace(k, image, uv) {
+    const gl = this.gl, f = this.faces[k];
+    gl.deleteTexture(f.tex); gl.deleteTexture(f.blur);
+    f.tex = this._texture(image); f.blur = this._texture(blurred(image));
+    gl.bindBuffer(gl.ARRAY_BUFFER, f.uv);
+    gl.bufferData(gl.ARRAY_BUFFER, uv, gl.STATIC_DRAW);
+  }
+
   // open 0..1, width (1 relaxed, <1 round, >1 spread), teeth 0..1, blink 0..1
   // rest: morphed face shape (or null = the photo's own shape)
   // layers: [{face, w: Float32Array per point}] weights that add up to 1

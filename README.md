@@ -55,8 +55,8 @@ On the first start, if there is no face yet, the server downloads a free one fro
 
 The face never stops changing: its eyes, brows, nose, lips, cheekbones and jawline each slowly turn into features from other people, one after another, while the gaze stays steady. Skin tone and lighting always come from your main photo, so it reads as one living face.
 
-- On first start the server downloads 8 AI-generated faces (people who don't exist) into `public/faces`.
-- Add your own photos to `public/faces` (front-facing works best) and refresh. Photos there are never committed to git.
+- New AI-generated people (nobody real) are pulled live from the internet as the app runs, and fresh ones keep replacing older ones. Nothing is saved to disk.
+- Optional: put your own photos in `public/faces` to mix them in. Photos there are never committed to git.
 - Turn it off any time in Settings → **Morph between different people's features**.
 
 ## Speed settings

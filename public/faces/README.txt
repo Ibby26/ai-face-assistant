@@ -1,4 +1,3 @@
-Put photos of faces here (front-facing, jpg/png/webp). The talking face keeps morphing
-its eyes, brows, nose, lips, cheekbones and jaw between these faces.
-A few AI-generated faces (people who don't exist) are downloaded here automatically.
+Optional: put your own face photos here (front-facing, jpg/png/webp) to mix them into the morph.
+The app already pulls new AI-generated faces live from the internet, without saving them.
 Photos in this folder are never committed to git.

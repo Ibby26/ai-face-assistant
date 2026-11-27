@@ -100,30 +100,49 @@ export class Face {
     }
   }
 
-  // other people's faces for the morph: /api/faces lists them (the server
-  // collects a few AI faces on first start, plus any you put in public/faces)
+  // other people's faces for the morph. New AI-generated people are pulled
+  // live from the internet (nothing is saved), and fresh ones keep replacing
+  // older ones so the face never repeats. Your own photos in public/faces
+  // (optional) are mixed in too.
   async _loadDonors(token) {
-    const done = new Set();
-    for (let round = 0; round < 15 && token === this._token; round++) {
-      let list = [];
-      try { list = (await (await fetch('/api/faces')).json()).faces || []; } catch {}
-      for (const url of list) {
-        if (done.has(url) || token !== this._token) continue;
-        done.add(url);
-        try {
-          const img = await loadImage(url);
-          const s = Math.min(1, 900 / Math.max(img.naturalWidth, img.naturalHeight));
-          const c = document.createElement('canvas');
-          c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
-          c.getContext('2d', { willReadFrequently: true }).drawImage(img, 0, 0, c.width, c.height);
-          const det = await getLandmarker();
-          const p = det.detect(c).faceLandmarks?.[0];
-          if (!p || token !== this._token) continue;
-          this.morph.addDonor(c, landmarksFromMediaPipe(p, c.width, c.height));
-        } catch (e) { console.warn('Skipping face', url, e); }
+    const alive = () => token === this._token;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const seen = new Set();
+    const prep = async (url) => {
+      const img = await loadImage(url);
+      const s = Math.min(1, 900 / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
+      const x = c.getContext('2d', { willReadFrequently: true });
+      x.drawImage(img, 0, 0, c.width, c.height);
+      // skip exact repeats
+      const d = x.getImageData(c.width >> 1, c.height >> 1, 4, 4).data.join(',');
+      if (seen.has(d)) return null;
+      seen.add(d);
+      const det = await getLandmarker();
+      const p = det.detect(c).faceLandmarks?.[0];
+      return p ? { c, lm: landmarksFromMediaPipe(p, c.width, c.height) } : null;
+    };
+    try {
+      const own = (await (await fetch('/api/faces')).json()).faces || [];
+      for (const url of own) {
+        if (!alive()) return;
+        try { const f = await prep(url); if (f) this.morph.addDonor(f.c, f.lm); } catch {}
       }
-      if (list.length >= 8 && done.size >= list.length) break;
-      await new Promise((r) => setTimeout(r, 8000));
+    } catch {}
+    let n = 0, fails = 0;
+    while (alive()) {
+      try {
+        const f = await prep('/api/liveface?n=' + Date.now() + '-' + n++);
+        if (f && alive()) {
+          if (this.morph.faceCount < 9) this.morph.addDonor(f.c, f.lm);
+          else this.morph.replaceDonor(f.c, f.lm);
+        }
+        fails = 0;
+      } catch { fails++; }
+      // fill up quickly at first, then bring in a new person every ~20 seconds;
+      // if the internet hiccups, wait a bit longer each time and try again
+      await sleep(fails ? Math.min(60000, 5000 * fails) : this.morph.faceCount < 9 ? 1300 : 20000);
     }
   }
 
@@ -265,9 +284,10 @@ export class Face {
     const tOpen = clamp(shape ? shape.open : this.getLevel());
     const tWidth = shape ? shape.width : 1 + this.level * 0.03;
     const tTeeth = shape ? shape.teeth : 0.5;
-    this.level += (tOpen - this.level) * (tOpen > this.level ? 0.5 : 0.32);
-    this.width += (tWidth - this.width) * 0.32;
-    this.teeth += (tTeeth - this.teeth) * 0.3;
+    // shapes come pre-timed from the audio, so follow them closely (little lag)
+    this.level += (tOpen - this.level) * (tOpen > this.level ? 0.7 : 0.5);
+    this.width += (tWidth - this.width) * 0.45;
+    this.teeth += (tTeeth - this.teeth) * 0.4;
     const blink = this._blinkAmount(now);
 
     if (this.renderer) {

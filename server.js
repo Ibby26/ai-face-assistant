@@ -44,38 +44,31 @@ function findFace() {
 }
 
 // ---------------------------------------------------------------- morph faces
-// Other people's faces the main face keeps morphing into. Put your own photos
-// in public/faces; a few AI-generated faces are added automatically.
+// The face keeps morphing into features from other people. Those faces are
+// pulled live from the internet on demand and never saved to disk:
+// thispersondoesnotexist.com makes a new AI person (nobody real) every request.
+app.get('/api/liveface', async (_req, res) => {
+  try {
+    const r = await fetch('https://thispersondoesnotexist.com/', {
+      headers: { 'User-Agent': 'Mozilla/5.0', 'Cache-Control': 'no-cache' },
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    res.setHeader('Content-Type', r.headers.get('content-type') || 'image/jpeg');
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(Buffer.from(await r.arrayBuffer()));
+  } catch (err) {
+    console.warn('Live face failed:', err.message);
+    res.status(502).end();
+  }
+});
+
+// Optional: your own extra faces in public/faces are mixed in too.
 const FACES_DIR = path.join(PUBLIC, 'faces');
 app.get('/api/faces', (_req, res) => {
   let files = [];
   try { files = fs.readdirSync(FACES_DIR).filter((f) => /\.(jpe?g|png|webp)$/i.test(f)); } catch {}
   res.json({ faces: files.sort().map((f) => '/faces/' + encodeURIComponent(f)) });
 });
-
-async function ensureDonorFaces(target = 8) {
-  fs.mkdirSync(FACES_DIR, { recursive: true });
-  const have = () => fs.readdirSync(FACES_DIR).filter((f) => /\.(jpe?g|png|webp)$/i.test(f));
-  const sizes = new Set(have().map((f) => fs.statSync(path.join(FACES_DIR, f)).size));
-  let added = 0;
-  for (let tries = 0; have().length < target && tries < target * 2; tries++) {
-    try {
-      const r = await fetch('https://thispersondoesnotexist.com/', { headers: { 'User-Agent': 'Mozilla/5.0', 'Cache-Control': 'no-cache' } });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const buf = Buffer.from(await r.arrayBuffer());
-      if (!sizes.has(buf.length)) {
-        sizes.add(buf.length);
-        fs.writeFileSync(path.join(FACES_DIR, `ai-${Date.now()}.jpg`), buf);
-        added++;
-      }
-    } catch (err) {
-      console.warn('Could not download a morph face:', err.message);
-      break;
-    }
-    await new Promise((r) => setTimeout(r, 1500)); // a new face is generated every second or so
-  }
-  if (added) console.log(`Added ${added} AI faces for the morph (public/faces).`);
-}
 
 // ---------------------------------------------------------------- ask (SSE)
 const systemPrompt = () => `You are a friendly, brilliant AI search assistant with a human face. The user sees your face and hears you speak, so everything you write is read aloud.
@@ -85,9 +78,12 @@ Rules:
 - Be fast and spoken: usually 2 to 5 short sentences, unless the user asks for more detail.
 - No markdown, no bullet lists, no URLs, no emojis. Write numbers and dates the way you'd say them.
 - Use web search when the question needs current or specific facts. Don't announce that you are searching.
-- VERY FIRST thing in every reply, before anything else (even before searching): one line in this exact format with 3 to 5 short, concrete, visual English image search terms for the topic:
-[[img: term one | term two | term three]]
-  You may add one more [[img: ...]] line later if the topic shifts. These lines are hidden from the user and drive pictures on screen.
+- The screen shows pictures about the user's question while you answer. To drive them, the VERY FIRST thing in every reply (before anything else, even before searching) is these two hidden lines:
+[[img: search 1 | search 2 | search 3 | search 4 | search 5]]
+[[gen: prompt 1 | prompt 2 | prompt 3]]
+  img = 4 to 6 English photo search queries for Wikipedia and Wikimedia Commons. Each one must be specific to the user's exact subject and make sense on its own, naming the actual people, places, things, events or dates involved. Never generic words. Example for "how did World War 2 end": Japanese surrender USS Missouri 1945 | V-J Day Times Square 1945 | Soviet flag Reichstag Berlin 1945 | VE Day London crowds 1945 | Hiroshima atomic bomb 1945
+  gen = 2 or 3 English prompts for AI-generated pictures that illustrate this specific subject: say exactly what is in the scene (who, what, where, when, era-accurate details) and the mood. Example: "Japanese and Allied officials at the surrender ceremony on the deck of USS Missouri, Tokyo Bay, September 1945, black and white archival photo style"
+  If the answer moves on to a clearly different subject, you may add one more [[img: ...]] and [[gen: ...]] line for it. These lines are never read aloud.
 
 Today's date is ${new Date().toDateString()}.`;
 
@@ -121,7 +117,7 @@ app.post('/api/ask', async (req, res) => {
 
   const tagParser = makeTagParser(
     (t) => send('text', { t }),
-    (terms) => send('images', { terms }),
+    (items, kind) => send(kind === 'gen' ? 'gen' : 'images', kind === 'gen' ? { prompts: items } : { terms: items }),
   );
   let speed = SPEED;
   let gotOutput = false;
@@ -221,10 +217,10 @@ function makeTagParser(onText, onTerms) {
       }
       const inner = buf.slice(2, end);
       buf = buf.slice(end + 2).replace(/^\s*\n?/, '');
-      const m = inner.match(/^\s*img\s*:(.*)$/is);
+      const m = inner.match(/^\s*(img|gen)\s*:(.*)$/is);
       if (m) {
-        const terms = m[1].split('|').map((s) => s.trim()).filter(Boolean).slice(0, 6);
-        if (terms.length) onTerms(terms);
+        const items = m[2].split('|').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean).slice(0, 6);
+        if (items.length) onTerms(items, m[1].toLowerCase());
       }
     }
   };
@@ -316,7 +312,7 @@ app.post('/api/genimage', async (req, res) => {
       method: 'POST',
       headers: { Authorization: `Key ${FAL_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        prompt: `${prompt}, cinematic, highly detailed, dramatic lighting, photorealistic`,
+        prompt: /photo|painting|illustration|style/i.test(prompt) ? `${prompt}, highly detailed` : `${prompt}, cinematic photograph, highly detailed`,
         image_size: 'landscape_16_9',
         num_inference_steps: 4,
         num_images: 1,
@@ -366,7 +362,6 @@ async function ensureLandmarkModel() {
 }
 
 await Promise.all([ensureFace(), ensureLandmarkModel()]);
-ensureDonorFaces().catch(() => {}); // in the background; the app picks them up as they arrive
 app.listen(PORT, () => {
   console.log(`\n  AI Face is running:  http://localhost:${PORT}\n`);
   console.log(`  Claude: ${anthropic ? 'ready (' + MODEL + ', ' + SPEED + ')' : 'MISSING ANTHROPIC_API_KEY'}`);

@@ -42,6 +42,10 @@
     <label class="row"><input type="checkbox" id="showText" checked /> Show subtitles</label>
     <label class="row"><input type="checkbox" id="aiImgs" checked /> AI-generated images</label>
     <label class="row"><input type="checkbox" id="morph" checked /> Morph between different people's features</label>
+    <label>Lip-sync timing <span class="muted" id="lipOffsetVal">0 ms</span>
+      <input type="range" id="lipOffset" min="-300" max="300" step="10" value="0" />
+      <span class="muted">Mouth late? Slide right. Mouth early? Slide left. (Bluetooth headphones usually need +150 to +250.)</span>
+    </label>
     <label class="row"><input type="checkbox" id="showMesh" /> Show face mesh (to check the mouth and eyes were found)</label>
     <div class="row gap">
       <button type="button" id="faceBtn">Change face…</button>

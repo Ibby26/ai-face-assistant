@@ -43,12 +43,19 @@ const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
 // ElevenLabs tells us when every letter is spoken; loudness adds natural energy.
 face.getShape = () => {
   const cur = speaker.cur;
-  if (cur?.align && speaker.playing && actx) {
-    const t = actx.currentTime - cur.startAt - (actx.outputLatency || actx.baseLatency || 0) + 0.04;
-    const s = shapeAt(cur.align, t);
-    const amp = face.getLevel();
-    const energy = s.open > 0 ? 0.6 + 0.6 * clamp(amp * 1.6) : 1;
-    return { open: clamp(s.open * energy), width: s.width, teeth: s.teeth };
+  if (cur && speaker.playing && actx) {
+    // where we are in this sentence's audio, as you hear it. Lips move a
+    // fraction of a second before the sound (as real speakers' do), plus your
+    // own adjustment from Settings for slow speakers or Bluetooth headphones.
+    const heard = actx.currentTime - cur.startAt - (actx.outputLatency || actx.baseLatency || 0);
+    const t = heard + 0.06 + lipOffset() / 1000;
+    // how loud the voice is right then, read straight from the audio itself,
+    // so the mouth is open exactly when there is sound and closed in pauses
+    const env = envAt(cur.env, t);
+    if (!cur.align) return { open: clamp(env * 0.9), width: 1 + env * 0.05, teeth: 0.5 };
+    const s = shapeAt(cur.align, t + 0.02);
+    const open = s.closed ? env * 0.04 : clamp(Math.pow(env, 0.8) * (0.3 + 0.85 * s.open));
+    return { open, width: s.width, teeth: s.teeth };
   }
   if (fakeTalk && browserWord.text) {
     // browser voice: we only know which word is being said, so step through
@@ -63,6 +70,29 @@ face.getShape = () => {
   return null; // fall back to loudness only
 };
 const browserWord = { text: '', at: 0 };
+const lipOffset = () => Number(document.querySelector('#lipOffset')?.value || 0);
+
+// loudness of an AudioBuffer every 10 ms, scaled so normal speech is ~0.8
+function envelope(buf) {
+  const data = buf.getChannelData(0), step = Math.round(buf.sampleRate / 100);
+  const env = new Float32Array(Math.ceil(data.length / step));
+  for (let i = 0; i < env.length; i++) {
+    let s = 0; const a = i * step, b = Math.min(data.length, a + step);
+    for (let j = a; j < b; j++) s += data[j] * data[j];
+    env[i] = Math.sqrt(s / Math.max(1, b - a));
+  }
+  const sorted = Array.from(env).sort((x, y) => x - y);
+  const ref = sorted[Math.floor(sorted.length * 0.92)] || 1;
+  const floor = ref * 0.12;
+  for (let i = 0; i < env.length; i++) env[i] = clamp((env[i] - floor) / (ref - floor) * 0.85);
+  return env;
+}
+function envAt(env, t) {
+  if (!env || t < 0) return 0;
+  const x = t * 100, i = Math.floor(x);
+  if (i >= env.length - 1) return i === env.length - 1 ? env[i] : 0;
+  return env[i] + (env[i + 1] - env[i]) * (x - i);
+}
 
 class Speaker {
   constructor() { this.reset(); }
@@ -123,7 +153,7 @@ class Speaker {
           const bin = Uint8Array.from(atob(j.audio), (c) => c.charCodeAt(0));
           const buffer = await audioCtx().decodeAudioData(bin.buffer);
           const align = j.chars?.length ? { chars: j.chars, starts: j.starts, ends: j.ends } : null;
-          return { buffer, align };
+          return { buffer, align, env: envelope(buffer) };
         })
         .catch((e) => { console.warn(e); return null; });
     }
@@ -146,7 +176,7 @@ class Speaker {
       this.node = node;
       node.onended = () => { this.cur = null; this._next(gen); };
       const startAt = actx.currentTime + 0.02;
-      this.cur = { startAt, align: got.align };
+      this.cur = { startAt, align: got.align, env: got.env };
       node.start(startAt);
     } else {
       await this._browserSay(item.text, gen);
@@ -236,12 +266,12 @@ function addPic(url, caption, ai = false, front = false) {
   im.src = url;
 }
 
-async function findPhotos(term) {
+async function findPhotos(term, { limit = 8, commons = true } = {}) {
   if (!term) return;
   const gen = pics.gen;
   const q = encodeURIComponent(term);
-  const wiki = `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrsearch=${q}&gsrlimit=10&prop=pageimages&piprop=thumbnail&pithumbsize=900`;
-  const commons = `https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrsearch=${q}%20filetype:bitmap&gsrlimit=10&prop=imageinfo&iiprop=url&iiurlwidth=900`;
+  const wiki = `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrsearch=${q}&gsrlimit=${limit}&prop=pageimages&piprop=thumbnail&pithumbsize=900`;
+  const commonsUrl = `https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrsearch=${q}%20filetype:bitmap&gsrlimit=${limit}&prop=imageinfo&iiprop=url&iiurlwidth=900`;
   const take = async (url, fn) => {
     try {
       const j = await (await fetch(url)).json();
@@ -252,7 +282,7 @@ async function findPhotos(term) {
   };
   await Promise.all([
     take(wiki, (p) => p.thumbnail?.source && !/\.svg/i.test(p.thumbnail.source) && addPic(p.thumbnail.source, p.title)),
-    take(commons, (p) => {
+    commons && take(commonsUrl, (p) => {
       const u = p.imageinfo?.[0]?.thumburl;
       if (u && !/\.(svg|tif|pdf)/i.test(p.title)) addPic(u, p.title.replace(/^File:/, '').replace(/\.[a-z]+$/i, '').replace(/_/g, ' '));
     }),
@@ -261,7 +291,7 @@ async function findPhotos(term) {
 
 let aiCount = 0;
 async function makeAiImage(prompt) {
-  if (!config.aiImages || !$('#aiImgs').checked || aiCount >= 3) return;
+  if (!config.aiImages || !$('#aiImgs').checked || aiCount >= 5) return;
   aiCount++;
   const gen = pics.gen;
   try {
@@ -382,8 +412,10 @@ async function ask(question) {
   subtitle(question, '…');
   status('Thinking…');
 
-  // instant pictures from the raw question while Claude starts
-  findPhotos(question.replace(/[?¿!.,]/g, ' ').split(/\s+/).filter((w) => w.length > 3).slice(0, 6).join(' ') || question);
+  // a few instant pictures for the whole question while Claude starts
+  // (Claude then sends exact search terms and picture ideas for the subject)
+  findPhotos(question, { limit: 3, commons: false });
+  let gotGen = false;
 
   speaker.lang = micLangUsed || '';
   speaker.onDone = () => {
@@ -409,7 +441,12 @@ async function ask(question) {
         subtitle(question, me.text.trim());
         speaker.push(data.t);
       } else if (event === 'images') {
-        data.terms.forEach((t, i) => { findPhotos(t); if (i < 2) makeAiImage(t); });
+        data.terms.forEach((t) => findPhotos(t, { limit: 5 }));
+        // if no picture prompts come, illustrate the first search ideas instead
+        setTimeout(() => { if (!gotGen && current === me) data.terms.slice(0, 2).forEach(makeAiImage); }, 1500);
+      } else if (event === 'gen') {
+        gotGen = true;
+        data.prompts.forEach(makeAiImage);
       } else if (event === 'search') {
         status('🔎 ' + data.query);
         findPhotos(data.query);
@@ -678,6 +715,9 @@ $('#gear').onclick = () => $('#settings').classList.toggle('hidden');
 $('#closeSettings').onclick = () => $('#settings').classList.add('hidden');
 $('#morph').onchange = (e) => { face.morphOn = e.target.checked; try { localStorage.setItem('morph', e.target.checked ? '1' : '0'); } catch {} };
 try { if (localStorage.getItem('morph') === '0') { $('#morph').checked = false; face.morphOn = false; } } catch {}
+try { const o = localStorage.getItem('lipOffset'); if (o) $('#lipOffset').value = o; } catch {}
+$('#lipOffsetVal').textContent = $('#lipOffset').value + ' ms';
+$('#lipOffset').oninput = (e) => { $('#lipOffsetVal').textContent = e.target.value + ' ms'; try { localStorage.setItem('lipOffset', e.target.value); } catch {} };
 $('#showMesh').onchange = (e) => { face.debug = e.target.checked; };
 $('#showText').onchange = (e) => $('#subtitle').classList.toggle('off', !e.target.checked);
 $('#faceBtn').onclick = () => $('#faceFile').click();

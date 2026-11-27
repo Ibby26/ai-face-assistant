@@ -4,7 +4,7 @@
 
 export const SHAPES = {
   rest: { open: 0.0, width: 1.0, teeth: 0.0 },
-  MBP: { open: 0.0, width: 0.94, teeth: 0.0 }, // lips pressed: m b p
+  MBP: { open: 0.0, width: 0.94, teeth: 0.0, closed: true }, // lips pressed: m b p
   FV: { open: 0.1, width: 1.02, teeth: 1.0 }, // top teeth on lower lip: f v
   TH: { open: 0.22, width: 1.02, teeth: 0.9 },
   AA: { open: 0.95, width: 1.05, teeth: 0.5 }, // father, cat
@@ -84,7 +84,7 @@ export function shapeFor(ch, i = 0) {
 export function shapeAt(al, t) {
   const { chars, starts, ends } = al;
   const n = chars.length;
-  if (!n || t < (starts[0] ?? 0) - 0.05 || t > (ends[n - 1] ?? 0) + 0.05) return SHAPES.rest;
+  if (!n || t < (starts[0] ?? 0) - 0.08 || t > (ends[n - 1] ?? 0) + 0.05) return SHAPES.rest;
   // binary search for the letter being spoken
   let lo = 0, hi = n - 1;
   while (lo < hi) {
@@ -105,7 +105,8 @@ export function shapeAt(al, t) {
 shapeAt.pick = (chars, i, dir) => {
   const s = shapeFor(chars[i], i);
   if (s) return s;
-  if (chars[i] && /\s/.test(chars[i])) return SHAPES.rest;
+  // between words the mouth doesn't snap shut; keep the neighbouring shape
+  // (loudness closes it in real pauses)
   const j = dir ? i + 1 : i - 1;
   return (chars[j] && shapeFor(chars[j], j)) || SHAPES.rest;
 };
@@ -115,5 +116,6 @@ export function mix(a, b, k) {
     open: a.open + (b.open - a.open) * k,
     width: a.width + (b.width - a.width) * k,
     teeth: a.teeth + (b.teeth - a.teeth) * k,
+    closed: k < 0.5 ? !!a.closed : !!b.closed,
   };
 }
