@@ -23,6 +23,8 @@ export class Holo {
       z: Math.random(),
     }));
     this.bars = new Float32Array(96);
+    this.faceless = false;
+    this.orbLevel = 0;
     this._resize = () => {
       const d = Math.min(2, devicePixelRatio || 1);
       canvas.width = innerWidth * d; canvas.height = innerHeight * d;
@@ -50,6 +52,7 @@ export class Holo {
     const [r, g, b] = this.col.map(Math.round);
     const rgba = (a) => `rgba(${r},${g},${b},${a})`;
     const level = this.getLevel();
+    this.orbLevel += (level - this.orbLevel) * 0.35;
     this.energy += ((mode === 'thinking' ? 0.8 : mode === 'speaking' ? 0.45 + level : mode === 'listening' ? 0.6 : 0.2) - this.energy) * 0.05;
     this.spin += dt * (0.15 + this.energy * 0.9);
 
@@ -115,6 +118,9 @@ export class Holo {
       x.fillRect(px - size / 2, py - size / 2, size, size);
     }
 
+    // no face: a living energy orb in the middle that speaks
+    if (this.faceless) this._orb(x, cx, cy, R, level, now, rgba);
+
     // labels
     x.globalCompositeOperation = 'source-over';
     x.font = `600 ${Math.max(10, R * 0.026)}px "JetBrains Mono", ui-monospace, Consolas, monospace`;
@@ -127,5 +133,44 @@ export class Holo {
     x.fillStyle = rgba(0.45);
     const bY = cy + R * 1.36;
     if (bY < H - 150) x.fillText(`${t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}  ·  LINK ${mode === 'idle' ? 'STANDBY' : 'ACTIVE'}`, cx, bY);
+  }
+
+  _orb(x, cx, cy, R, level, now, rgba) {
+    const t = now / 1000;
+    const lv = this.orbLevel;
+    const r = R * (0.42 + lv * 0.08 + 0.012 * Math.sin(t * 2.1)) * (1 + this.energy * 0.04);
+    // soft outer glow
+    let g = x.createRadialGradient(cx, cy, r * 0.2, cx, cy, r * 1.6);
+    g.addColorStop(0, rgba(0.35 + lv * 0.3));
+    g.addColorStop(0.55, rgba(0.08));
+    g.addColorStop(1, rgba(0));
+    x.fillStyle = g;
+    x.beginPath(); x.arc(cx, cy, r * 1.6, 0, Math.PI * 2); x.fill();
+    // the core
+    g = x.createRadialGradient(cx - r * 0.25, cy - r * 0.3, r * 0.05, cx, cy, r);
+    g.addColorStop(0, 'rgba(255,255,255,0.85)');
+    g.addColorStop(0.25, rgba(0.75));
+    g.addColorStop(0.8, 'rgba(110,70,255,0.35)');
+    g.addColorStop(1, rgba(0));
+    x.fillStyle = g;
+    x.beginPath(); x.arc(cx, cy, r, 0, Math.PI * 2); x.fill();
+    // energy bands swirling inside, wobbling with the voice
+    x.lineWidth = 1.4;
+    for (let i = 0; i < 7; i++) {
+      const a = t * (0.4 + i * 0.13) * (i % 2 ? -1 : 1) + i;
+      x.save();
+      x.translate(cx, cy); x.rotate(a);
+      x.scale(1, 0.25 + 0.7 * Math.abs(Math.sin(t * 0.5 + i)));
+      x.strokeStyle = rgba(0.18 + lv * 0.45);
+      x.beginPath();
+      for (let k = 0; k <= 64; k++) {
+        const th = (k / 64) * Math.PI * 2;
+        const wob = 1 + lv * 0.12 * Math.sin(th * 6 + t * 9 + i) + 0.03 * Math.sin(th * 3 - t * 2);
+        const px = Math.cos(th) * r * 0.82 * wob, py = Math.sin(th) * r * 0.82 * wob;
+        k ? x.lineTo(px, py) : x.moveTo(px, py);
+      }
+      x.stroke();
+      x.restore();
+    }
   }
 }

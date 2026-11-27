@@ -3,12 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>AI Face</title>
-  <meta name="theme-color" content="#04060a" />
+  <title>Nova</title>
+  <meta name="theme-color" content="#03050a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <link rel="manifest" href="/manifest.json" crossorigin="use-credentials" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" type="image/png" href="/icons/favicon.png" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-title" content="Nova" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" />
@@ -58,6 +61,24 @@
     <header><h2>Settings</h2><button type="button" id="closeSettings" class="x" aria-label="Close">×</button></header>
     <div class="scroll">
     <section>
+      <h3>Voice &amp; personality</h3>
+      <label class="field"><b>Voice</b>
+        <span class="row2"><select id="voice"></select><button type="button" id="voicePreview" class="mini" title="Hear this voice">▶ Hear</button></span>
+        <small id="voiceAbout"></small></label>
+      <label class="field"><b>Speaking speed <span id="voiceSpeedVal">1.0×</span></b>
+        <input type="range" id="voiceSpeed" min="0.7" max="1.2" step="0.05" value="1" /></label>
+      <label class="field"><b>Personality</b>
+        <select id="persona">
+          <option value="friendly">Friendly – warm and encouraging</option>
+          <option value="professional">Professional – precise, no small talk</option>
+          <option value="witty">Witty – clever and playful</option>
+          <option value="calm">Calm – gentle and soothing</option>
+          <option value="enthusiastic">Enthusiastic – full of energy</option>
+          <option value="storyteller">Storyteller – brings facts to life</option>
+          <option value="futuristic">Year 2050 AI – sleek, mysterious</option>
+        </select></label>
+    </section>
+    <section>
       <h3>Talking</h3>
       <label class="field"><b>Microphone language</b><select id="micLang"></select></label>
       <label class="sw"><span><b>Hands-free</b><small>Listens for its name. Chrome and Edge.</small></span><input type="checkbox" role="switch" id="wakeOn" checked /></label>
@@ -69,6 +90,7 @@
     </section>
     <section>
       <h3>Face</h3>
+      <label class="sw"><span><b>Show the face</b><small>Off: just the voice, pictures and a hologram orb.</small></span><input type="checkbox" role="switch" id="showFace" checked /></label>
       <label class="sw"><span><b>Eye contact</b><small>Uses your camera to look at you. The video never leaves this device.</small></span><input type="checkbox" role="switch" id="eyeContact" checked /></label>
       <label class="sw"><span><b>Morphing features</b><small>Blends in features from other people.</small></span><input type="checkbox" role="switch" id="morph" checked /></label>
       <label class="sw"><span><b>Show face mesh</b><small>Check the mouth and eyes were found.</small></span><input type="checkbox" role="switch" id="showMesh" /></label>
@@ -93,6 +115,11 @@
         <button type="button" id="forget" class="ghost danger">Forget everything</button>
         <a id="logout" href="/logout" class="ghost" hidden>Sign out</a>
       </div>
+    </section>
+    <section>
+      <h3>App</h3>
+      <div class="btns"><button type="button" id="installBtn" hidden>Install Nova as an app</button></div>
+      <small id="installHint"></small>
     </section>
     <section>
       <h3>System</h3>

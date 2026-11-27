@@ -148,7 +148,7 @@ class Speaker {
       item.audio = fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, previous: this.spoken.slice(-300) }),
+        body: JSON.stringify({ text, previous: this.spoken.slice(-300), voice: $('#voice').value || undefined, speed: voiceSpeed() }),
       })
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error('tts ' + r.status))))
         .then(async (j) => {
@@ -190,9 +190,10 @@ class Speaker {
       if (!window.speechSynthesis) return setTimeout(resolve, 60 * text.length);
       const u = new SpeechSynthesisUtterance(text);
       u.lang = this.lang || guessLang(text);
-      const v = pickVoice(u.lang);
+      const chosen = voices.find((x) => x.name === $('#voice').value && x.lang.toLowerCase().startsWith(u.lang.toLowerCase().split('-')[0]));
+      const v = chosen || pickVoice(u.lang);
       if (v) u.voice = v;
-      u.rate = 1.05;
+      u.rate = 1.05 * voiceSpeed();
       u.onstart = () => { if (gen === this.gen) fakeTalk = true; };
       u.onboundary = (e) => {
         if (e.name && e.name !== 'word') return;
@@ -540,7 +541,7 @@ async function ask(question) {
     const r = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, history, remember: $('#remember').checked, name: assistantName() }),
+      body: JSON.stringify({ question, history, remember: $('#remember').checked, name: assistantName(), persona: $('#persona').value }),
       signal: me.abort.signal,
     });
     if (r.status === 401) { location.href = '/login'; return; }
@@ -920,10 +921,10 @@ $('#wake').onclick = async () => {
   if (window.speechSynthesis) speechSynthesis.speak(new SpeechSynthesisUtterance(''));
   $('#start').classList.add('gone');
   await ready;
-  await face.playIntro();
+  if (!face.hidden) await face.playIntro();
   if (!config.claude) status('Add your ANTHROPIC_API_KEY to the .env file, then restart the server.', 10000);
   if (wake.enabled()) wake.start();
-  startEyes();
+  if (!face.hidden) startEyes();
   if (!('ontouchstart' in window)) $('#q').focus();
 };
 
@@ -973,7 +974,7 @@ $('#faceReset').onclick = async () => {
 // hands-free + memory settings (remembered in this browser)
 const saved = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } };
 const store = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
-for (const id of ['wakeOn', 'bargeIn', 'showInfo', 'remember', 'holoOn', 'eyeContact']) {
+for (const id of ['wakeOn', 'bargeIn', 'showInfo', 'remember', 'holoOn', 'eyeContact', 'showFace']) {
   $('#' + id).checked = saved(id, '1') === '1';
   $('#' + id).addEventListener('change', (e) => store(id, e.target.checked ? '1' : '0'));
 }
@@ -992,7 +993,104 @@ $('#showInfo').addEventListener('change', (e) => { if (!e.target.checked) { $('#
 const holoMode = () => { holo.on = $('#holoOn').checked; document.body.classList.toggle('holo', holo.on); };
 $('#holoOn').addEventListener('change', holoMode);
 holoMode();
-$('#eyeContact').addEventListener('change', (e) => { if (e.target.checked) startEyes(); else presence.stop(); });
+$('#eyeContact').addEventListener('change', (e) => { if (e.target.checked && !face.hidden) startEyes(); else presence.stop(); });
+
+// ---- face on/off
+function applyFace(first) {
+  const show = $('#showFace').checked;
+  face.hidden = !show;
+  holo.faceless = !show;
+  document.body.classList.toggle('faceless', !show);
+  if (!show) presence.stop();
+  else if (!first && $('#start').classList.contains('gone')) {
+    if (!face.live && !face.intro) face.playIntro(2200);
+    startEyes();
+  }
+}
+$('#showFace').addEventListener('change', () => applyFace(false));
+applyFace(true);
+
+// ---- voice, speed and personality
+function voiceSpeed() { return Number($('#voiceSpeed').value) || 1; }
+let voiceList = [];
+async function fillVoicePicker() {
+  const sel = $('#voice');
+  sel.innerHTML = '';
+  const savedVoice = saved('voice', '');
+  if (config.voice) {
+    try {
+      const j = await (await fetch('/api/voices')).json();
+      voiceList = j.voices || [];
+      for (const v of voiceList) {
+        const o = document.createElement('option');
+        o.value = v.id;
+        o.textContent = [v.name, [v.gender, v.accent].filter(Boolean).join(', ')].filter(Boolean).join(' – ');
+        sel.appendChild(o);
+      }
+      sel.value = voiceList.some((v) => v.id === savedVoice) ? savedVoice : j.default;
+      if (!sel.value && voiceList[0]) sel.value = voiceList[0].id;
+    } catch {}
+  }
+  if (!sel.options.length) {
+    // browser voices (no ElevenLabs key)
+    const o = document.createElement('option'); o.value = ''; o.textContent = 'Automatic (best for the language)';
+    sel.appendChild(o);
+    for (const v of (window.speechSynthesis?.getVoices() || [])) {
+      const x = document.createElement('option'); x.value = v.name; x.textContent = `${v.name} (${v.lang})`;
+      sel.appendChild(x);
+    }
+    sel.value = [...sel.options].some((o) => o.value === savedVoice) ? savedVoice : '';
+  }
+  showVoiceAbout();
+}
+function showVoiceAbout() {
+  const v = voiceList.find((x) => x.id === $('#voice').value);
+  $('#voiceAbout').textContent = v ? [v.about, v.gender, v.accent].filter(Boolean).join(' · ') : config.voice ? '' : 'Add an ElevenLabs key for realistic voices.';
+}
+$('#voice').addEventListener('change', () => { store('voice', $('#voice').value); showVoiceAbout(); });
+window.speechSynthesis?.addEventListener?.('voiceschanged', () => { if (!config.voice) fillVoicePicker(); });
+$('#voiceSpeed').value = saved('voiceSpeed', '1');
+const speedLabel = () => { $('#voiceSpeedVal').textContent = voiceSpeed().toFixed(2).replace(/0$/, '') + '×'; };
+speedLabel();
+$('#voiceSpeed').addEventListener('input', () => { store('voiceSpeed', $('#voiceSpeed').value); speedLabel(); });
+$('#persona').value = saved('persona', 'friendly');
+$('#persona').addEventListener('change', () => store('persona', $('#persona').value));
+$('#voicePreview').onclick = (e) => {
+  e.preventDefault();
+  current?.abort.abort(); current = null;
+  speaker.reset();
+  audioCtx();
+  const lines = {
+    friendly: `Hi, I'm ${assistantName()}. Ask me anything, and I'll find it for you.`,
+    professional: `${assistantName()} here. Ready when you are.`,
+    witty: `Hello, I'm ${assistantName()}. I've read most of the internet so you don't have to.`,
+    calm: `Hello. I'm ${assistantName()}. Take your time, I'm here.`,
+    enthusiastic: `Hey! I'm ${assistantName()}, and I can't wait to explore something with you!`,
+    storyteller: `Every question has a story. I'm ${assistantName()}. Shall we begin?`,
+    futuristic: `Link established. I am ${assistantName()}. The archive of humanity is open.`,
+  };
+  speaker.onDone = () => setMode('idle');
+  speaker.push(lines[$('#persona').value] || lines.friendly);
+  speaker.end();
+};
+ready.then(fillVoicePicker);
+
+// ---- installable app
+let installEvt = null;
+const standalone = () => matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches || navigator.standalone;
+function installUi() {
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  $('#installBtn').hidden = !installEvt;
+  $('#installHint').textContent = standalone() ? 'Installed: Nova opens full screen from your home screen.'
+    : installEvt ? 'Adds Nova to your home screen or desktop, opening full screen like an app.'
+    : ios ? 'On iPhone or iPad: open this page in Safari, tap Share, then “Add to Home Screen”.'
+    : 'In Chrome or Edge: open the browser menu and choose “Install app” or “Add to Home screen”.';
+}
+addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; installUi(); });
+addEventListener('appinstalled', () => { installEvt = null; installUi(); status('Nova is installed. Open it from your home screen.', 5000); });
+$('#installBtn').onclick = async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; installUi(); };
+installUi();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 $('#infoClose').onclick = () => { $('#info').classList.add('hidden'); document.body.classList.remove('has-info'); };
 nameHint();
 ready.then(nameHint);

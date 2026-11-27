@@ -47,6 +47,35 @@ app.get('/api/config', (_req, res) => {
   });
 });
 
+// ---------------------------------------------------------------- voices
+// The voices in your ElevenLabs account (their free premade ones plus any you
+// added from the Voice Library), for the voice picker in Settings.
+let voiceCache = { at: 0, list: [] };
+app.get('/api/voices', async (_req, res) => {
+  if (!ELEVEN_KEY) return res.json({ voices: [], default: '' });
+  if (Date.now() - voiceCache.at > 10 * 60 * 1000 || !voiceCache.list.length) {
+    try {
+      const r = await fetch('https://api.elevenlabs.io/v1/voices', { headers: { 'xi-api-key': ELEVEN_KEY } });
+      const j = await r.json();
+      if (!r.ok) throw new Error(r.status + ' ' + JSON.stringify(j).slice(0, 200));
+      voiceCache = {
+        at: Date.now(),
+        list: (j.voices || []).map((v) => ({
+          id: v.voice_id,
+          name: v.name,
+          gender: v.labels?.gender || '',
+          accent: v.labels?.accent || '',
+          about: v.labels?.descriptive || v.labels?.description || v.labels?.use_case || '',
+          preview: v.preview_url || '',
+        })).sort((a, b) => a.name.localeCompare(b.name)),
+      };
+    } catch (err) {
+      console.warn('Could not list voices:', err.message);
+    }
+  }
+  res.json({ voices: voiceCache.list, default: ELEVEN_VOICE });
+});
+
 // ---------------------------------------------------------------- memory
 app.get('/api/memory', (_req, res) => res.json(memory.summary()));
 app.delete('/api/memory', (_req, res) => { memory.clear(); res.json({ ok: true }); });
@@ -87,7 +116,17 @@ app.get('/api/faces', (_req, res) => {
 });
 
 // ---------------------------------------------------------------- ask (SSE)
-const systemPrompt = (name, remember) => `You are ${name}, a friendly, brilliant AI search assistant with a human face. The user sees your face and hears you speak, so everything you write is read aloud.
+const PERSONALITIES = {
+  friendly: 'Your personality: warm, friendly and encouraging, like a brilliant friend.',
+  professional: 'Your personality: calm, precise and professional, like a top expert briefing an executive. No small talk.',
+  witty: 'Your personality: witty and playful, with a light, clever sense of humour, but always accurate.',
+  calm: 'Your personality: calm, gentle and soothing. Speak softly and simply.',
+  enthusiastic: 'Your personality: energetic and enthusiastic, genuinely excited by ideas and discoveries.',
+  storyteller: 'Your personality: a captivating storyteller who brings facts to life with vivid detail and a sense of drama.',
+  futuristic: 'Your personality: an advanced AI from the year 2050: confident, insightful and a little mysterious, with a sleek, futuristic way of speaking.',
+};
+const systemPrompt = (name, remember, persona = 'friendly') => `You are ${name}, a brilliant AI search assistant with a human face. The user sees your face and hears you speak, so everything you write is read aloud.
+${PERSONALITIES[persona] || PERSONALITIES.friendly}
 
 Rules:
 - Reply in the same language the user used.
@@ -134,6 +173,7 @@ app.post('/api/ask', async (req, res) => {
   const question = String(req.body?.question || '').slice(0, 4000);
   const remember = req.body?.remember !== false;
   const name = String(req.body?.name || ASSISTANT_NAME).slice(0, 40);
+  const persona = String(req.body?.persona || 'friendly');
   let answer = '';
   const messages = [
     ...history
@@ -172,7 +212,7 @@ app.post('/api/ask', async (req, res) => {
             }
           },
           isClosed: () => closed,
-          system: systemPrompt(name, remember),
+          system: systemPrompt(name, remember, persona),
         });
       } catch (err) {
         // Fast mode not available on this account / rate limited: retry at standard speed.
@@ -298,9 +338,12 @@ app.post('/api/tts', async (req, res) => {
   if (!ELEVEN_KEY) return res.status(404).json({ error: 'no voice key' });
   const text = String(req.body?.text || '').slice(0, 2000);
   if (!text.trim()) return res.status(400).end();
+  const voice = /^[A-Za-z0-9]{8,40}$/.test(req.body?.voice || '') ? req.body.voice : ELEVEN_VOICE;
+  // ElevenLabs accepts 0.7 (slow) to 1.2 (fast)
+  const speed = Math.max(0.7, Math.min(1.2, Number(req.body?.speed) || 1));
   try {
     const r = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(ELEVEN_VOICE)}/with-timestamps?output_format=mp3_44100_128`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}/with-timestamps?output_format=mp3_44100_128`,
       {
         method: 'POST',
         headers: { 'xi-api-key': ELEVEN_KEY, 'Content-Type': 'application/json' },
@@ -308,7 +351,7 @@ app.post('/api/tts', async (req, res) => {
           text,
           model_id: 'eleven_flash_v2_5', // lowest latency, 32 languages
           previous_text: req.body?.previous || undefined,
-          voice_settings: { stability: 0.45, similarity_boost: 0.8, style: 0.15, use_speaker_boost: true },
+          voice_settings: { stability: 0.45, similarity_boost: 0.8, style: 0.15, use_speaker_boost: true, speed },
         }),
       },
     );

@@ -275,18 +275,9 @@ export class Face {
 
 
   // ------------------------------------------------------------ live face
-  _loop(now) {
-    this._raf = requestAnimationFrame(this._loop);
-    if (!this.img) return;
-    if (this.intro) { this._drawIntro(now); return; }
-    const { ctx, W, H } = this;
-    if (!this.live) {
-      ctx.fillStyle = '#04060a';
-      ctx.fillRect(0, 0, W, H);
-      return;
-    }
-    // mouth: follow the shape of the current sound (or just loudness),
-    // quick to open, a little softer to close, like real lips
+  // mouth: follow the shape of the current sound (or just loudness),
+  // quick to open, a little softer to close, like real lips
+  _mouth() {
     const shape = this.getShape();
     const tOpen = clamp(shape ? shape.open : this.getLevel());
     const tWidth = shape ? shape.width : 1 + this.level * 0.03;
@@ -295,6 +286,22 @@ export class Face {
     this.level += (tOpen - this.level) * (tOpen > this.level ? 0.7 : 0.5);
     this.width += (tWidth - this.width) * 0.45;
     this.teeth += (tTeeth - this.teeth) * 0.4;
+  }
+
+  _loop(now) {
+    this._raf = requestAnimationFrame(this._loop);
+    // face turned off: keep following the voice (the hologram orb uses it)
+    // but don't draw anything
+    if (this.hidden) { this._mouth(); return; }
+    if (!this.img) return;
+    if (this.intro) { this._drawIntro(now); return; }
+    const { ctx, W, H } = this;
+    if (!this.live) {
+      ctx.fillStyle = '#04060a';
+      ctx.fillRect(0, 0, W, H);
+      return;
+    }
+    this._mouth();
     const blink = this._blinkAmount(now);
 
     if (this.renderer) {

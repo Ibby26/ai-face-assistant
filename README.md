@@ -18,6 +18,8 @@ Without ElevenLabs the face uses your browser's built-in voice. Without fal.ai y
 
 ## Run it
 
+**Updating from a ZIP:** extract the new ZIP and copy everything inside it into your existing folder, choosing **Replace** when asked. Your `.env`, your memory (`data`) and your face picture are not in the ZIP, so they stay. Then run `npm install` and start it again.
+
 ```bash
 git clone <this repo>
 cd ai-face-assistant
@@ -43,6 +45,8 @@ Open **http://localhost:3000**, click **Tap to wake**, and allow the microphone 
 4. It prints a private `https://….trycloudflare.com` link and a QR code. Scan it with your phone, type your password once, and that phone stays signed in.
    On iPhone, tap Share → **Add to Home Screen** to open it like an app.
 
+**Install it like an app:** on Android or in Chrome/Edge on a computer, open Settings → **Install Nova as an app** (or the browser menu → Install app). On iPhone, open the link in Safari, tap Share → **Add to Home Screen**. It then opens full screen from its own icon.
+
 Your computer has to stay on and awake while you use it, and the link changes each time you run `npm run online`. Without `APP_PASSWORD` the app refuses every visitor except your own computer, so it can never be open to the internet by accident. Five wrong passwords in a row slow down further tries.
 
 ## Using it
@@ -50,6 +54,8 @@ Your computer has to stay on and awake while you use it, and the link changes ea
 - **Talk:** click the mic (or hold **Space**), speak, and stop talking. It answers automatically.
 - **Type:** type in the box and press Enter.
 - **Interrupt:** start talking or asking again at any time; **Esc** stops it.
+- **Voice and personality:** in Settings → Voice & personality, pick any voice in your ElevenLabs account (tap **Hear** to try it), set the speaking speed, and choose a personality (friendly, professional, witty, calm, enthusiastic, storyteller, or a year-2050 AI). To get more voices, add them from the ElevenLabs Voice Library and they appear in the list.
+- **No face:** turn off Settings → **Show the face** for just the voice, pictures and a glowing hologram orb that pulses as it speaks.
 - **Hands-free:** just say **“Hey Nova, …”** with your question, any time (Chrome and Edge). Say only “Hey Nova” and it opens the mic for you. The 👂 in the bar shows it's listening. Change the name in Settings.
 - **Interrupt by talking:** while it speaks, say its name, or just start talking, and it stops and listens. It ignores its own voice; if it ever cuts itself off on speakers, turn off Settings → **Interrupt it by just talking** or use headphones.
 - **Living face:** it shows expressions that match what it's saying (happy, excited, sad, surprised, serious, thinking), glances around naturally, and with **Eye contact** on it uses your camera to look at you and turn toward you. The camera picture is analysed in your browser and never sent anywhere. A hologram of rings and light bars around the face moves with its voice and changes colour as it listens, thinks and speaks (Settings → **Hologram effects**).

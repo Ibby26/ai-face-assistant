@@ -1,9 +1,19 @@
 {
-  "name": "AI Face",
-  "short_name": "AI Face",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#04060a",
-  "theme_color": "#04060a",
-  "icons": []
+  "name": "Nova – AI Face",
+  "short_name": "Nova",
+  "description": "A talking AI face that searches the web and answers in your language.",
+  "id": "/",
+  "start_url": "/?app=1",
+  "scope": "/",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
+  "background_color": "#03050a",
+  "theme_color": "#03050a",
+  "categories": ["productivity", "education", "utilities"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
 }
